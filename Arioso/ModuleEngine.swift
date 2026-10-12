@@ -254,7 +254,8 @@ final class ModuleStore {
     func value(_ m: InstalledModule, _ s: ModuleSetting) -> String { m.values[s.key] ?? s.defaultValue }
 
     /// Reads the entries of a repository file. Synchronous, so nothing non-Sendable crosses an await.
-    private static func parseRepoEntries(_ obj: Any, base: URL) -> [ModuleRepo.Entry] {
+    nonisolated private static func parseRepoEntries(_ data: Data, base: URL) -> [ModuleRepo.Entry]? {
+        guard let obj = try? JSONSerialization.jsonObject(with: data) else { return nil }
         var entries: [ModuleRepo.Entry] = []
         func take(_ list: [[String: Any]]) {
             for e in list {
@@ -283,8 +284,7 @@ final class ModuleStore {
     func addRepo(_ url: URL) async throws -> ModuleRepo {
         let src = Self.rawURL(url)
         let (data, _) = try await URLSession.shared.data(from: src)
-        guard let obj = try? JSONSerialization.jsonObject(with: data) else { throw ModuleError.invalid("the repository isn't JSON") }
-        var entries: [ModuleRepo.Entry] = Self.parseRepoEntries(obj, base: src.deletingLastPathComponent())
+        guard var entries = Self.parseRepoEntries(data, base: src.deletingLastPathComponent()) else { throw ModuleError.invalid("the repository isn't JSON") }
         guard !entries.isEmpty else { throw ModuleError.invalid("no extensions found in that repository") }
         // Peek at each file so locked 8SPINE-only modules are marked instead of failing on install.
         for i in entries.indices {
