@@ -253,21 +253,15 @@ final class ModuleStore {
 
     func value(_ m: InstalledModule, _ s: ModuleSetting) -> String { m.values[s.key] ?? s.defaultValue }
 
-    // MARK: Repositories (8SPINE "module-source.json")
-
-    @discardableResult
-    func addRepo(_ url: URL) async throws -> ModuleRepo {
-        let src = Self.rawURL(url)
-        let (data, _) = try await URLSession.shared.data(from: src)
-        guard let obj = try? JSONSerialization.jsonObject(with: data) else { throw ModuleError.invalid("the repository isn't JSON") }
+    /// Reads the entries of a repository file. Synchronous, so nothing non-Sendable crosses an await.
+    private static func parseRepoEntries(_ obj: Any, base: URL) -> [ModuleRepo.Entry] {
         var entries: [ModuleRepo.Entry] = []
-        let base = src.deletingLastPathComponent()
         func take(_ list: [[String: Any]]) {
             for e in list {
-                let file = (e["download"] as? String) ?? (e["file"] as? String) ?? (e["url"] as? String)
+                let file: String? = (e["download"] as? String) ?? (e["file"] as? String) ?? (e["url"] as? String)
                 guard let file else { continue }
-                let folder = (e["folder"] as? String).map { $0 + "/" } ?? ""
-                let full = file.hasPrefix("http") ? URL(string: file) : URL(string: folder + file, relativeTo: base)?.absoluteURL
+                let folder: String = (e["folder"] as? String).map { $0 + "/" } ?? ""
+                let full: URL? = file.hasPrefix("http") ? URL(string: file) : URL(string: folder + file, relativeTo: base)?.absoluteURL
                 guard let full else { continue }
                 entries.append(.init(id: (e["id"] as? String) ?? file, name: (e["name"] as? String) ?? file,
                                      version: (e["version"] as? String) ?? "", author: e["author"] as? String,
@@ -279,6 +273,18 @@ final class ModuleStore {
             for (_, v) in dict.sorted(by: { $0.key < $1.key }) { if let list = v as? [[String: Any]] { take(list) } }
             if let list = dict["modules"] as? [[String: Any]] { take(list) }
         } else if let list = obj as? [[String: Any]] { take(list) }
+        return entries
+    }
+
+
+    // MARK: Repositories (8SPINE "module-source.json")
+
+    @discardableResult
+    func addRepo(_ url: URL) async throws -> ModuleRepo {
+        let src = Self.rawURL(url)
+        let (data, _) = try await URLSession.shared.data(from: src)
+        guard let obj = try? JSONSerialization.jsonObject(with: data) else { throw ModuleError.invalid("the repository isn't JSON") }
+        var entries: [ModuleRepo.Entry] = Self.parseRepoEntries(obj, base: src.deletingLastPathComponent())
         guard !entries.isEmpty else { throw ModuleError.invalid("no extensions found in that repository") }
         // Peek at each file so locked 8SPINE-only modules are marked instead of failing on install.
         for i in entries.indices {
