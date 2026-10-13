@@ -9,7 +9,7 @@ struct AppleMusicNextButton: View {
     
     var body: some View {
         Button { player.next() } label: {
-            PhaseAnimator(AnimationPhase.allCases, trigger: player.currentIndex) { content, phase in
+            PhaseAnimator(AnimationPhase.allCases, trigger: player.currentIndex) { phase in
                 ZStack {
                     let gap = size * 0.18
                     let triW = size * 0.35
@@ -56,7 +56,7 @@ struct AppleMusicPreviousButton: View {
     
     var body: some View {
         Button { player.previous() } label: {
-            PhaseAnimator(AnimationPhase.allCases, trigger: player.currentIndex) { content, phase in
+            PhaseAnimator(AnimationPhase.allCases, trigger: player.currentIndex) { phase in
                 ZStack {
                     let gap = size * 0.18
                     let triW = size * 0.35
@@ -107,7 +107,7 @@ struct AppleMusicStarButton: View {
     
     var body: some View {
         Button { library.toggleFavorite(track) } label: {
-            PhaseAnimator(StarPhase.allCases, trigger: track.isFavorite) { content, phase in
+            PhaseAnimator(StarPhase.allCases, trigger: track.isFavorite) { phase in
                 Image(systemName: track.isFavorite ? "star.fill" : "star")
                     .font(.system(size: size, weight: .semibold))
                     .foregroundStyle(track.isFavorite ? .yellow : .white)
