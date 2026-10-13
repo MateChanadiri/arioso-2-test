@@ -5,6 +5,7 @@ import SwiftUI
 enum Links {
     static let website = URL(string: "https://mrsc.pages.dev")!
     static let github = URL(string: "https://github.com/Henkek221/mrsc")!
+    static let discord = URL(string: "https://discord.gg/kZTTJxjvQW")! // Added back to fix About.swift
 }
 
 // MARK: - Website look
