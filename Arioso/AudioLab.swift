@@ -1,397 +1,381 @@
-import SwiftUI
 import AVFoundation
+import AudioToolbox
 import Observation
+import SwiftUI
 
-// MARK: - Router
-
-extension EnvironmentValues {
-    /// True inside the Settings sheet, where screens hide their own Settings button.
-    @Entry var inSettings = false
+nonisolated struct DeviceProfile: Codable, Hashable, Sendable, Identifiable {
+    var id: String          // route uid
+    var name: String
+    var eqPresetID: String?
+    var preamp: Float
+    var bass: Float
+    var treble: Float
+    var balance: Float
 }
 
-enum AppTab: Hashable { case home, library, studio, files, search, custom(String) }
-
-enum Route: Hashable {
-    case songs, playlists, artists, albums
-    case playlist(UUID)
-    case artist(String)
-    case album(String)
-    case equalizer
-    case metadata
-    case files
-    case studio
-    case audioLab
-    case trackMix
-    case downloads
-    case favorites
-    case radio
-    case recentlyPlayed
-    case sources
-    case organize
-    case queueRules
-}
-
+/// Everything after the equalizer: tone, loudness, dynamics, channels and spatial rendering,
+/// plus EQ rules per song / album / output device.
 @Observable
-final class Router {
-    var tab: AppTab = .home
-    var libraryPath: [Route] = []
-    var showPlayer = false
-    /// Opens the player straight into its edit mode (Customize ▸ Music Player).
-    var editPlayerOnOpen = false
-    var showSettings = false
-    var importKind: ImportKind?
-    var showImporter = false
-    var searchActive = false
-    var showAdd = false
-    var collapsed = false
-    var searchText = ""
-    /// Navigation paths of tabs other than Library (custom tab layouts).
-    var paths: [String: [Route]] = [:]
-    var showFullLyrics = false
-    var showSongListImport = false
-    var showOnboarding = false
-    var showGoodbye = false
-    /// Add Music opens straight on the server step (from the welcome flow).
-    var addMusicAtServer = false
-    var moduleInstall: ModuleInstallPrompt?
-
-    func startSongListImport() {
-        showAdd = false
-        showSettings = false
-        showOnboarding = false
-        Task {
-            try? await Task.sleep(for: .milliseconds(450))
-            showSongListImport = true
-        }
-    }
-    var showThemes = false
-    /// Set by the custom tab layout; `open(_:)` falls back to the current tab when Library is hidden.
-    @ObservationIgnored var hasLibraryTab = true
-
-    func closeSearch() {
-        searchActive = false
-        collapsed = false
-        searchText = ""
-    }
-
-    /// Pushes onto the stack the user is already in (so Back returns there); starts a fresh stack when switching tabs.
-    func open(_ route: Route) {
-        showPlayer = false
-        showSettings = false
-        if searchActive { closeSearch() }
-        func push(_ path: inout [Route]) {
-            if path.last != route { path.append(route) }
-        }
-        if hasLibraryTab || tab == .library {
-            if tab == .library { push(&libraryPath) } else { tab = .library; libraryPath = [route] }
-        } else {
-            push(&paths[tabKey(tab), default: []])
-        }
-    }
-
-    /// The one "Add Music" flow; closes whatever sheet is up first.
-    func openAddMusic(atServer: Bool = false) {
-        let wait = showSettings || showPlayer || showOnboarding
-        showSettings = false
-        showPlayer = false
-        showOnboarding = false
-        addMusicAtServer = atServer
-        Task {
-            if wait { try? await Task.sleep(for: .milliseconds(450)) }
-            showAdd = true
-        }
-    }
-
-    func replayOnboarding() {
-        showSettings = false
-        Task {
-            try? await Task.sleep(for: .milliseconds(450))
-            showOnboarding = true
-        }
-    }
-
-    func tabKey(_ tab: AppTab) -> String {
-        switch tab {
-        case .home: "home"
-        case .library: "library"
-        case .studio: "studio"
-        case .files: "files"
-        case .search: "search"
-        case .custom(let id): id
-        }
-    }
-
-    func startImport(_ kind: ImportKind) {
-        showAdd = false
-        showSettings = false
-        showOnboarding = false
-        importKind = kind
-        // The file importer can't appear while another sheet is still dismissing.
-        Task {
-            try? await Task.sleep(for: .milliseconds(450))
-            showImporter = true
-        }
-    }
-
-    /// Called by scroll views: collapse the add/search pills when scrolling down, restore on scroll up.
-    func scrolled(from old: CGFloat, to new: CGFloat) {
-        if new < 20 { if collapsed { collapsed = false }; return }
-        if new > old + 6, !collapsed { collapsed = true }
-        else if new < old - 6, collapsed { collapsed = false }
-    }
-}
-
-// MARK: - Settings
-
-@Observable
-final class AppSettings {
+final class AudioLab {
     private let d = UserDefaults.standard
 
-    var continuousPlayback: Bool { didSet { d.set(continuousPlayback, forKey: "continuous") } }
-    var crossfadeEnabled: Bool { didSet { d.set(crossfadeEnabled, forKey: "crossfade") } }
-    var crossfadeSeconds: Double { didSet { d.set(crossfadeSeconds, forKey: "crossfadeSeconds") } }
-    var appearance: Int { didSet { d.set(appearance, forKey: "appearance") } }
-    var listenBrainzEnabled: Bool { didSet { d.set(listenBrainzEnabled, forKey: "lbEnabled") } }
-    var listenBrainzToken: String { didSet { d.set(listenBrainzToken, forKey: "lbToken") } }
-    var lastFmEnabled: Bool { didSet { d.set(lastFmEnabled, forKey: "lastFmEnabled") } }
-    var lastFmKey: String { didSet { d.set(lastFmKey, forKey: "lastFmKey") } }
-    var autoLyrics: Bool { didSet { d.set(autoLyrics, forKey: "autoLyrics") } }
-    var lyricsLanguage: String { didSet { d.set(lyricsLanguage, forKey: "lyricsLanguage") } }
+    var preamp: Float { didSet { applyTone(); d.set(preamp, forKey: "labPreamp") } }
+    var bass: Float { didSet { applyTone(); d.set(bass, forKey: "labBass") } }
+    var treble: Float { didSet { applyTone(); d.set(treble, forKey: "labTreble") } }
+    var balance: Float { didSet { balanceMixer.pan = balance; d.set(balance, forKey: "labBalance") } }
+    var mono: Bool { didSet { if mono != oldValue { rewire() }; d.set(mono, forKey: "labMono") } }
+    var spatial: Bool { didSet { if spatial != oldValue { rewire() }; d.set(spatial, forKey: "labSpatial") } }
+    var headTracking: Bool { didSet { environment.isListenerHeadTrackingEnabled = headTracking; d.set(headTracking, forKey: "labHeadTracking") } }
+    var normalize: Bool { didSet { d.set(normalize, forKey: "labNormalize"); onGainRulesChanged() } }
+    var preferReplayGain: Bool { didSet { d.set(preferReplayGain, forKey: "labReplayGain"); onGainRulesChanged() } }
+    var targetLoudness: Double { didSet { d.set(targetLoudness, forKey: "labTarget"); onGainRulesChanged() } }
+    var limiter: Bool { didSet { limiterUnit.bypass = !limiter; d.set(limiter, forKey: "labLimiter") } }
+    var compressor: Bool { didSet { compressorUnit.bypass = !compressor; d.set(compressor, forKey: "labCompressor") } }
+    var compression: Float { didSet { applyCompressor(); d.set(compression, forKey: "labCompression") } }
 
-    // Playback continuation
-    var continuationMode: ContinuationMode { didSet { d.set(continuationMode.rawValue, forKey: "continuationMode") } }
-    var continuationPlaylist: String { didSet { d.set(continuationPlaylist, forKey: "continuationPlaylist") } }
+    var songEQ: [String: String] { didSet { saveMap(songEQ, "labSongEQ") } }
+    var albumEQ: [String: String] { didSet { saveMap(albumEQ, "labAlbumEQ") } }
+    var deviceProfiles: [DeviceProfile] { didSet { if let data = try? JSONEncoder().encode(deviceProfiles) { d.set(data, forKey: "labDevices") } } }
 
-    // Shuffle
-    var smartShuffle: Bool { didSet { d.set(smartShuffle, forKey: "smartShuffle") } }
-    /// 0 = completely random, 1 = familiar favourites.
-    var shuffleFamiliarity: Double { didSet { d.set(shuffleFamiliarity, forKey: "shuffleFamiliarity") } }
+    private(set) var routeName = "iPhone"
+    private(set) var routeID = "speaker"
+    private(set) var routeSupportsSpatial = false
+    private(set) var activeProfile: DeviceProfile?
 
-    // Sleep timer
-    var sleepFadeSeconds: Double { didSet { d.set(sleepFadeSeconds, forKey: "sleepFade") } }
+    @ObservationIgnored var onGainRulesChanged: () -> Void = {}
 
-    // Track mix
-    var transitionStyle: TransitionStyle { didSet { d.set(transitionStyle.rawValue, forKey: "transitionStyle") } }
-    var transitionEffect: TransitionEffect { didSet { d.set(transitionEffect.rawValue, forKey: "transitionEffect") } }
-    var gapless: Bool { didSet { d.set(gapless, forKey: "gapless") } }
-    var smartTransitions: Bool { didSet { d.set(smartTransitions, forKey: "smartTransitions") } }
-    var beatMatch: Bool { didSet { d.set(beatMatch, forKey: "beatMatch") } }
-    var djMode: Bool { didSet { d.set(djMode, forKey: "djMode") } }
-    var skipSilence: Bool { didSet { d.set(skipSilence, forKey: "skipSilence") } }
-
-    // Lyrics
-    var wordLyrics: Bool { didSet { d.set(wordLyrics, forKey: "wordLyrics") } }
-    var onlineLyrics: Bool { didSet { d.set(onlineLyrics, forKey: "onlineLyrics") } }
-    var serverLyrics: Bool { didSet { d.set(serverLyrics, forKey: "serverLyrics") } }
-    var translateLyrics: Bool { didSet { d.set(translateLyrics, forKey: "translateLyrics") } }
-    var translationTarget: String { didSet { d.set(translationTarget, forKey: "translationTarget") } }
-
-    // Integration
-    /// Extra Live Activity with the current lyric line. Off by default: the system Now Playing already owns
-    /// the Dynamic Island and Lock Screen player, a second activity just splits the Island.
-    var liveLyrics: Bool { didSet { d.set(liveLyrics, forKey: "liveLyrics") } }
-    var lockArtwork: Bool { didSet { d.set(lockArtwork, forKey: "lockArtwork") } }
-    var lockArtLayout: LockArtLayout { didSet { d.set(lockArtLayout.rawValue, forKey: "lockArtLayout") } }
-    var lockArtMotion: LockArtMotion { didSet { d.set(lockArtMotion.rawValue, forKey: "lockArtMotion") } }
-    var offlineMode: Bool { didSet { d.set(offlineMode, forKey: "offlineMode") } }
-    var onlineLookups: Bool { didSet { d.set(onlineLookups, forKey: "onlineLookups") } }
+    // Nodes
+    @ObservationIgnored let tone = AVAudioUnitEQ(numberOfBands: 2)
+    @ObservationIgnored let compressorUnit = AVAudioUnitEffect(audioComponentDescription: AudioComponentDescription(
+        componentType: kAudioUnitType_Effect, componentSubType: kAudioUnitSubType_DynamicsProcessor,
+        componentManufacturer: kAudioUnitManufacturer_Apple, componentFlags: 0, componentFlagsMask: 0))
+    @ObservationIgnored let limiterUnit = AVAudioUnitEffect(audioComponentDescription: AudioComponentDescription(
+        componentType: kAudioUnitType_Effect, componentSubType: kAudioUnitSubType_PeakLimiter,
+        componentManufacturer: kAudioUnitManufacturer_Apple, componentFlags: 0, componentFlagsMask: 0))
+    @ObservationIgnored let balanceMixer = AVAudioMixerNode()
+    @ObservationIgnored let environment = AVAudioEnvironmentNode()
+    @ObservationIgnored private weak var engine: AVAudioEngine?
+    @ObservationIgnored private var routeTask: Task<Void, Never>?
 
     init() {
         let d = UserDefaults.standard
-        continuousPlayback = d.object(forKey: "continuous") as? Bool ?? true
-        crossfadeEnabled = d.bool(forKey: "crossfade")
-        crossfadeSeconds = d.object(forKey: "crossfadeSeconds") as? Double ?? 6
-        appearance = d.integer(forKey: "appearance")
-        listenBrainzEnabled = d.bool(forKey: "lbEnabled")
-        listenBrainzToken = d.string(forKey: "lbToken") ?? ""
-        lastFmEnabled = d.bool(forKey: "lastFmEnabled")
-        lastFmKey = d.string(forKey: "lastFmKey") ?? ""
-        autoLyrics = d.object(forKey: "autoLyrics") as? Bool ?? true
-        lyricsLanguage = d.string(forKey: "lyricsLanguage") ?? "auto"
-        continuationMode = d.string(forKey: "continuationMode").flatMap(ContinuationMode.init) ?? .shuffleLibrary
-        continuationPlaylist = d.string(forKey: "continuationPlaylist") ?? ""
-        smartShuffle = d.bool(forKey: "smartShuffle")
-        shuffleFamiliarity = d.object(forKey: "shuffleFamiliarity") as? Double ?? 0.5
-        sleepFadeSeconds = d.object(forKey: "sleepFade") as? Double ?? 10
-        transitionStyle = d.string(forKey: "transitionStyle").flatMap(TransitionStyle.init) ?? .equalPower
-        transitionEffect = d.string(forKey: "transitionEffect").flatMap(TransitionEffect.init) ?? .none
-        gapless = d.object(forKey: "gapless") as? Bool ?? true
-        smartTransitions = d.bool(forKey: "smartTransitions")
-        beatMatch = d.bool(forKey: "beatMatch")
-        djMode = d.bool(forKey: "djMode")
-        skipSilence = d.bool(forKey: "skipSilence")
-        wordLyrics = d.bool(forKey: "wordLyrics")
-        onlineLyrics = d.object(forKey: "onlineLyrics") as? Bool ?? true
-        serverLyrics = d.object(forKey: "serverLyrics") as? Bool ?? true
-        translateLyrics = d.bool(forKey: "translateLyrics")
-        translationTarget = d.string(forKey: "translationTarget") ?? (Locale.current.language.languageCode?.identifier ?? "en")
-        liveLyrics = d.bool(forKey: "liveLyrics")
-        lockArtwork = d.object(forKey: "lockArtwork") as? Bool ?? true
-        lockArtLayout = d.string(forKey: "lockArtLayout").flatMap(LockArtLayout.init) ?? .fill
-        lockArtMotion = d.string(forKey: "lockArtMotion").flatMap(LockArtMotion.init) ?? .breathe
-        offlineMode = d.bool(forKey: "offlineMode")
-        onlineLookups = d.object(forKey: "onlineLookups") as? Bool ?? true
+        preamp = d.object(forKey: "labPreamp") as? Float ?? 0
+        bass = d.object(forKey: "labBass") as? Float ?? 0
+        treble = d.object(forKey: "labTreble") as? Float ?? 0
+        balance = d.object(forKey: "labBalance") as? Float ?? 0
+        mono = d.bool(forKey: "labMono")
+        spatial = d.bool(forKey: "labSpatial")
+        headTracking = d.bool(forKey: "labHeadTracking")
+        normalize = d.bool(forKey: "labNormalize")
+        preferReplayGain = d.object(forKey: "labReplayGain") as? Bool ?? true
+        targetLoudness = d.object(forKey: "labTarget") as? Double ?? -14
+        limiter = d.object(forKey: "labLimiter") as? Bool ?? false
+        compressor = d.bool(forKey: "labCompressor")
+        compression = d.object(forKey: "labCompression") as? Float ?? 0.4
+        songEQ = (d.dictionary(forKey: "labSongEQ") as? [String: String]) ?? [:]
+        albumEQ = (d.dictionary(forKey: "labAlbumEQ") as? [String: String]) ?? [:]
+        deviceProfiles = (d.data(forKey: "labDevices").flatMap { try? JSONDecoder().decode([DeviceProfile].self, from: $0) }) ?? []
+
+        tone.bands[0].filterType = .lowShelf
+        tone.bands[0].frequency = 110
+        tone.bands[1].filterType = .highShelf
+        tone.bands[1].frequency = 7500
+        for b in tone.bands { b.bypass = false; b.bandwidth = 1 }
+        applyTone()
+        compressorUnit.bypass = !compressor
+        limiterUnit.bypass = !limiter
+        applyCompressor()
+        balanceMixer.pan = balance
+        environment.isListenerHeadTrackingEnabled = headTracking
+        observeRoute()
     }
 
-    /// DJ mode bundles the "real mix" options.
-    var effectiveCrossfade: Bool { crossfadeEnabled || djMode }
-    var effectiveSmartTransitions: Bool { smartTransitions || djMode }
-    var effectiveBeatMatch: Bool { beatMatch || djMode }
-    var effectiveEffect: TransitionEffect { djMode && transitionEffect == .none ? .bassSwap : transitionEffect }
-    var effectiveFadeSeconds: Double { djMode ? max(crossfadeSeconds, 10) : crossfadeSeconds }
+    private func saveMap(_ m: [String: String], _ key: String) { d.set(m, forKey: key) }
 
-    /// Locales to try, in order. "Auto" tries English first (most music), then the system language.
-    var lyricsLocales: [Locale] {
-        switch lyricsLanguage {
-        case "auto":
-            var list = [Locale(identifier: "en-US")]
-            if Locale.current.language.languageCode?.identifier != "en" { list.append(.current) }
-            return list
-        case "system": return [.current]
-        default: return [Locale(identifier: lyricsLanguage)]
+    // MARK: Graph
+
+    /// Inserts the lab between `input` and the engine's main mixer.
+    func attach(to engine: AVAudioEngine, after input: AVAudioNode) {
+        self.engine = engine
+        for n in [tone, compressorUnit, limiterUnit, balanceMixer, environment] as [AVAudioNode] { engine.attach(n) }
+        engine.connect(input, to: tone, format: nil)
+        engine.connect(tone, to: compressorUnit, format: nil)
+        engine.connect(compressorUnit, to: limiterUnit, format: nil)
+        engine.connect(limiterUnit, to: balanceMixer, format: nil)
+        connectTail()
+    }
+
+    private func connectTail() {
+        guard let engine else { return }
+        let rate = engine.outputNode.outputFormat(forBus: 0).sampleRate > 0 ? engine.outputNode.outputFormat(forBus: 0).sampleRate : 44100
+        let stereo = AVAudioFormat(standardFormatWithSampleRate: rate, channels: 2)
+        let monoFormat = AVAudioFormat(standardFormatWithSampleRate: rate, channels: 1)
+        engine.disconnectNodeOutput(balanceMixer)
+        engine.disconnectNodeOutput(environment)
+        if spatial {
+            balanceMixer.sourceMode = .ambienceBed
+            balanceMixer.renderingAlgorithm = .auto
+            environment.outputType = .auto
+            engine.connect(balanceMixer, to: environment, format: mono ? monoFormat : stereo)
+            engine.connect(environment, to: engine.mainMixerNode, format: stereo)
+        } else {
+            engine.connect(balanceMixer, to: engine.mainMixerNode, format: mono ? monoFormat : stereo)
+        }
+        balanceMixer.pan = balance
+    }
+
+    private func rewire() { connectTail() }
+
+    private func applyTone() {
+        tone.globalGain = preamp
+        tone.bands[0].gain = bass
+        tone.bands[1].gain = treble
+    }
+
+    private func applyCompressor() {
+        guard let au = compressorUnit.audioUnit as AudioUnit? else { return }
+        // 0 → gentle (-10 dB threshold), 1 → strong (-35 dB threshold) with make-up gain.
+        let c = max(0, min(1, compression))
+        AudioUnitSetParameter(au, kDynamicsProcessorParam_Threshold, kAudioUnitScope_Global, 0, -10 - 25 * c, 0)
+        AudioUnitSetParameter(au, kDynamicsProcessorParam_HeadRoom, kAudioUnitScope_Global, 0, 8 - 5 * c, 0)
+        AudioUnitSetParameter(au, kDynamicsProcessorParam_AttackTime, kAudioUnitScope_Global, 0, 0.004, 0)
+        AudioUnitSetParameter(au, kDynamicsProcessorParam_ReleaseTime, kAudioUnitScope_Global, 0, 0.12, 0)
+        AudioUnitSetParameter(au, kDynamicsProcessorParam_OverallGain, kAudioUnitScope_Global, 0, 6 * c, 0)
+    }
+
+    // MARK: Loudness
+
+    /// dB of gain that brings this song to the target loudness (0 when normalization is off or unknown).
+    func normalizationGain(for track: Track) -> Float {
+        guard normalize else { return 0 }
+        var gain: Double?
+        if preferReplayGain, let rg = track.replayGain { gain = rg + (targetLoudness + 18) }
+        else if let lufs = track.loudness { gain = targetLoudness - lufs }
+        else if let rg = track.replayGain { gain = rg + (targetLoudness + 18) }
+        return Float(max(-12, min(12, gain ?? 0)))
+    }
+
+    // MARK: EQ rules
+
+    static func albumKey(_ t: Track) -> String { "\(t.artist)|\(t.album)" }
+
+    /// Song rule > album rule > device profile > the user's own EQ.
+    func eqOverride(for track: Track?, eq: EQModel) -> (name: String, gains: [Float])? {
+        if let t = track, let id = songEQ[t.id.uuidString], let p = eq.preset(id: id) { return ("\(p.name) · Song", p.gains) }
+        if let t = track, let id = albumEQ[Self.albumKey(t)], let p = eq.preset(id: id) { return ("\(p.name) · Album", p.gains) }
+        if let prof = activeProfile, let id = prof.eqPresetID, let p = eq.preset(id: id) { return ("\(p.name) · \(prof.name)", p.gains) }
+        return nil
+    }
+
+    // MARK: Output devices
+
+    private func observeRoute() {
+        updateRoute()
+        routeTask = Task { [weak self] in
+            for await _ in NotificationCenter.default.notifications(named: AVAudioSession.routeChangeNotification) {
+                self?.updateRoute()
+            }
         }
     }
 
-    var colorScheme: ColorScheme? { appearance == 1 ? .light : appearance == 2 ? .dark : nil }
+    @ObservationIgnored var onRouteChanged: () -> Void = {}
+
+    func updateRoute() {
+        let out = AVAudioSession.sharedInstance().currentRoute.outputs.first
+        routeName = out?.portName ?? "iPhone"
+        routeID = out?.uid ?? "speaker"
+        routeSupportsSpatial = out?.isSpatialAudioEnabled ?? false
+        let profile = deviceProfiles.first { $0.id == routeID }
+        if profile != activeProfile {
+            activeProfile = profile
+            if let p = profile { preamp = p.preamp; bass = p.bass; treble = p.treble; balance = p.balance }
+        }
+        onRouteChanged()
+    }
+
+    func saveProfileForCurrentDevice(eqPresetID: String?) {
+        let p = DeviceProfile(id: routeID, name: routeName, eqPresetID: eqPresetID, preamp: preamp, bass: bass, treble: treble, balance: balance)
+        deviceProfiles.removeAll { $0.id == routeID }
+        deviceProfiles.append(p)
+        activeProfile = p
+        onRouteChanged()
+    }
+
+    func removeProfile(_ id: String) {
+        deviceProfiles.removeAll { $0.id == id }
+        if activeProfile?.id == id { activeProfile = nil }
+        onRouteChanged()
+    }
 }
 
-nonisolated enum ContinuationMode: String, CaseIterable, Identifiable, Sendable {
-    case stop, repeatQueue, continueLibrary, continueDownloads, continueFavorites, continuePlaylist, shuffleLibrary, smartShuffle, startOver
-    var id: String { rawValue }
-    var title: String {
-        switch self {
-        case .stop: "Stop After Queue"
-        case .repeatQueue: "Repeat Queue"
-        case .continueLibrary: "Continue Library"
-        case .continueDownloads: "Continue Downloads"
-        case .continueFavorites: "Continue Favorites"
-        case .continuePlaylist: "Continue Playlist"
-        case .shuffleLibrary: "Shuffle Library"
-        case .smartShuffle: "Smart Shuffle"
-        case .startOver: "Start Over When Library Ends"
+// MARK: - UI
+
+/// Audio Lab's sections, shown inside Sound (the one place for everything you hear): `.sound` is tone, loudness,
+/// channels and spatial; `.rules` the EQ for this song / album / device.
+struct AudioLabSections: View {
+    enum Part { case sound, rules }
+    let part: Part
+    @Environment(AudioLab.self) private var lab
+    @Environment(EQModel.self) private var eq
+    @Environment(PlayerModel.self) private var player
+
+    var body: some View {
+        @Bindable var lab = lab
+        switch part {
+        case .sound:
+            Section("Tone") {
+                gainSlider("Preamp", "speaker.wave.2", $lab.preamp)
+                gainSlider("Bass", "speaker.wave.3", $lab.bass)
+                gainSlider("Treble", "waveform.path.ecg", $lab.treble)
+                if lab.preamp != 0 || lab.bass != 0 || lab.treble != 0 {
+                    Button("Reset Tone") { withAnimation { lab.preamp = 0; lab.bass = 0; lab.treble = 0 } }
+                }
+            }
+
+            Section {
+                Toggle(isOn: $lab.normalize.animation()) { Label("Loudness Normalization", systemImage: "chart.bar.xaxis") }
+                if lab.normalize {
+                    Picker("Target", selection: $lab.targetLoudness) {
+                        Text("Loud (-11 LUFS)").tag(-11.0)
+                        Text("Normal (-14 LUFS)").tag(-14.0)
+                        Text("Quiet (-18 LUFS)").tag(-18.0)
+                        Text("Broadcast (-23 LUFS)").tag(-23.0)
+                    }
+                    Toggle(isOn: $lab.preferReplayGain) { Label("Use ReplayGain Tags", systemImage: "tag") }
+                }
+                Toggle(isOn: $lab.limiter) { Label("Limiter", systemImage: "rectangle.compress.vertical") }
+                Toggle(isOn: $lab.compressor.animation()) { Label("Compressor", systemImage: "arrow.down.right.and.arrow.up.left") }
+                if lab.compressor {
+                    HStack {
+                        Text("Gentle").font(.footnote).foregroundStyle(.secondary)
+                        Slider(value: $lab.compression, in: 0...1)
+                        Text("Strong").font(.footnote).foregroundStyle(.secondary)
+                    }
+                }
+            } header: { Text("Loudness & Dynamics") } footer: {
+                Text("Songs are measured once in the background. ReplayGain tags and Jellyfin's normalization values are used when present. The limiter keeps boosted songs from clipping.")
+            }
+
+            Section("Channels") {
+                Toggle(isOn: $lab.mono) { Label("Mono Audio", systemImage: "speaker.wave.1") }
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack {
+                        Label("Balance", systemImage: "arrow.left.and.right")
+                        Spacer()
+                        Text(balanceText).foregroundStyle(.secondary).monospacedDigit()
+                    }
+                    HStack {
+                        Text("L").font(.footnote.bold()).foregroundStyle(.secondary)
+                        Slider(value: $lab.balance, in: -1...1)
+                        Text("R").font(.footnote.bold()).foregroundStyle(.secondary)
+                    }
+                    .onTapGesture(count: 2) { lab.balance = 0 }
+                }
+            }
+
+            Section {
+                Toggle(isOn: $lab.spatial.animation()) { Label("Spatial Audio", systemImage: "airpodspro") }
+                if lab.spatial {
+                    Toggle(isOn: $lab.headTracking) { Label("Head Tracking", systemImage: "person.crop.circle.badge.checkmark") }
+                }
+                LabeledContent("Output", value: lab.routeName)
+                LabeledContent("System Spatial Audio", value: lab.routeSupportsSpatial ? "Available" : "Not on this output")
+            } header: { Text("Spatial") } footer: {
+                Text("Places the stereo image around you with head-related rendering. Works best with headphones; head tracking needs supported AirPods.")
+            }
+
+        case .rules:
+            if let t = player.current {
+                Section {
+                    presetPicker("This Song", selection: binding(\.songEQ, t.id.uuidString))
+                    presetPicker("This Album", selection: binding(\.albumEQ, AudioLab.albumKey(t)))
+                } header: { Text("EQ for “\(t.title)”") } footer: {
+                    Text("A song rule wins over an album rule, which wins over a device profile.")
+                }
+            }
+
+            Section {
+                if let p = lab.activeProfile {
+                    LabeledContent("Active Profile", value: p.name)
+                    presetPicker("Profile EQ", selection: Binding(get: { p.eqPresetID ?? "" }, set: { lab.saveProfileForCurrentDevice(eqPresetID: $0.isEmpty ? nil : $0) }))
+                    Button("Update with Current Tone") { lab.saveProfileForCurrentDevice(eqPresetID: p.eqPresetID) }
+                } else {
+                    Button { lab.saveProfileForCurrentDevice(eqPresetID: eq.activePreset?.id) } label: {
+                        Label("Save Settings for “\(lab.routeName)”", systemImage: "headphones")
+                    }
+                }
+                ForEach(lab.deviceProfiles) { p in
+                    HStack {
+                        Image(systemName: p.id == lab.routeID ? "checkmark.circle.fill" : "headphones").foregroundStyle(p.id == lab.routeID ? Theme.accent : .secondary)
+                        VStack(alignment: .leading) {
+                            Text(p.name)
+                            Text(profileSummary(p)).font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
+                    .swipeActions { Button("Delete", role: .destructive) { lab.removeProfile(p.id) } }
+                }
+            } header: { Text("Per Headphone / Device") } footer: {
+                Text("Music switches automatically when you connect a device that has a profile.")
+            }
+
+            if !lab.songEQ.isEmpty || !lab.albumEQ.isEmpty {
+                Section("EQ Rules") {
+                    ForEach(lab.albumEQ.sorted(by: { $0.key < $1.key }), id: \.key) { key, id in
+                        rule(icon: "square.stack", title: key.split(separator: "|").last.map(String.init) ?? key, preset: id) { lab.albumEQ[key] = nil }
+                    }
+                    ForEach(lab.songEQ.sorted(by: { $0.key < $1.key }), id: \.key) { key, id in
+                        let title = UUID(uuidString: key).flatMap { player.library.trackByID[$0]?.title } ?? "Song"
+                        rule(icon: "music.note", title: title, preset: id) { lab.songEQ[key] = nil }
+                    }
+                }
+            }
         }
     }
-    var symbol: String {
-        switch self {
-        case .stop: "stop.circle"
-        case .repeatQueue: "repeat"
-        case .continueLibrary: "books.vertical"
-        case .continueDownloads: "arrow.down.circle"
-        case .continueFavorites: "star"
-        case .continuePlaylist: "music.note.list"
-        case .shuffleLibrary: "shuffle"
-        case .smartShuffle: "sparkles"
-        case .startOver: "arrow.counterclockwise"
+
+    private var balanceText: String {
+        let b = lab.balance
+        if abs(b) < 0.02 { return "Center" }
+        return b < 0 ? "L \(Int(-b * 100))%" : "R \(Int(b * 100))%"
+    }
+
+    private func profileSummary(_ p: DeviceProfile) -> String {
+        var parts: [String] = []
+        if let id = p.eqPresetID, let preset = eq.preset(id: id) { parts.append(preset.name) }
+        if p.preamp != 0 { parts.append(String(format: "Preamp %+.0f dB", p.preamp)) }
+        if p.bass != 0 { parts.append(String(format: "Bass %+.0f", p.bass)) }
+        if p.treble != 0 { parts.append(String(format: "Treble %+.0f", p.treble)) }
+        return parts.isEmpty ? "Flat" : parts.joined(separator: " · ")
+    }
+
+    private func binding(_ path: ReferenceWritableKeyPath<AudioLab, [String: String]>, _ key: String) -> Binding<String> {
+        Binding(get: { lab[keyPath: path][key] ?? "" }, set: { lab[keyPath: path][key] = $0.isEmpty ? nil : $0; player.applyEQRules() })
+    }
+
+    private func presetPicker(_ title: String, selection: Binding<String>) -> some View {
+        Picker(title, selection: selection) {
+            Text("Default").tag("")
+            ForEach(eq.allPresets) { Text($0.name).tag($0.id) }
         }
     }
-    var detail: String {
-        switch self {
-        case .stop: "Playback stops when the queue is finished."
-        case .repeatQueue: "The queue starts again from the top."
-        case .continueLibrary: "Keeps going through your library in order."
-        case .continueDownloads: "Keeps going through music that's on this iPhone."
-        case .continueFavorites: "Plays your starred songs."
-        case .continuePlaylist: "Continues with a playlist you choose."
-        case .shuffleLibrary: "Random songs from your whole library."
-        case .smartShuffle: "A shuffle that knows what you like."
-        case .startOver: "Goes through your library, then starts again from the beginning of your downloaded music."
+
+    private func rule(icon: String, title: String, preset: String, remove: @escaping () -> Void) -> some View {
+        HStack {
+            Image(systemName: icon).foregroundStyle(.secondary).frame(width: 24)
+            Text(title).lineLimit(1)
+            Spacer()
+            Text(eq.preset(id: preset)?.name ?? "–").foregroundStyle(.secondary)
         }
+        .swipeActions { Button("Delete", role: .destructive) { remove(); player.applyEQRules() } }
     }
-}
 
-nonisolated enum TransitionStyle: String, CaseIterable, Identifiable, Sendable {
-    case equalPower, linear, fadeOutIn, cut
-    var id: String { rawValue }
-    var title: String {
-        switch self {
-        case .equalPower: "Smooth (Equal Power)"
-        case .linear: "Linear"
-        case .fadeOutIn: "Fade Out, Then In"
-        case .cut: "Quick Cut"
+    private func gainSlider(_ title: String, _ symbol: String, _ value: Binding<Float>) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Label(title, systemImage: symbol)
+                Spacer()
+                Text(String(format: "%+.1f dB", value.wrappedValue)).foregroundStyle(.secondary).monospacedDigit()
+            }
+            Slider(value: value, in: -12...12, step: 0.5)
         }
-    }
-}
-
-nonisolated enum TransitionEffect: String, CaseIterable, Identifiable, Sendable {
-    case none, filterSweep, bassSwap, echoOut
-    var id: String { rawValue }
-    var title: String {
-        switch self {
-        case .none: "None"
-        case .filterSweep: "Filter Sweep"
-        case .bassSwap: "Bass Swap (EQ Matching)"
-        case .echoOut: "Echo Out"
-        }
-    }
-}
-
-// MARK: - Equalizer
-
-nonisolated struct EQPreset: Identifiable, Codable, Hashable, Sendable {
-    var id: String
-    var name: String
-    var gains: [Float]
-    var builtIn = false
-}
-
-@Observable
-final class EQModel {
-    static let frequencies: [Float] = [32, 64, 125, 250, 500, 1000, 2000, 4000, 8000, 16000]
-    static let labels = ["32", "64", "125", "250", "500", "1K", "2K", "4K", "8K", "16K"]
-
-    static let presets: [EQPreset] = [
-        ("Hip-Hop", [5, 4, 2, 3, -1, -1, 1, -1, 2, 3]),
-        ("Vocal Booster", [-3, -2, 0, 1, 2, 3, 3, 2, 0, -1]),
-        ("Classical", [0, 0, 0, 0, 0, 0, -3, -3, -3, -4]),
-        ("Pop", [-1, 1, 3, 4, 3, 0, -1, -1, -1, -2]),
-        ("Rock", [4, 3, 2, 0, -1, -1, 1, 3, 4, 4]),
-        ("Flat", [0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
-    ].map { EQPreset(id: $0.0, name: $0.0, gains: $0.1, builtIn: true) }
-
-    let unit = AVAudioUnitEQ(numberOfBands: 10)
-    private let d = UserDefaults.standard
-
-    var gains: [Float] { didSet { apply(); d.set(gains.map(Double.init), forKey: "eqGains") } }
-    var enabled: Bool { didSet { apply(); d.set(enabled, forKey: "eqEnabled") } }
-    var custom: [EQPreset] { didSet { if let data = try? JSONEncoder().encode(custom) { d.set(data, forKey: "eqCustom") } } }
-    /// Temporary gains from a per-song / per-album / per-device rule. Never saved over the user's own curve.
-    var override: (name: String, gains: [Float])? { didSet { apply() } }
-
-    init() {
-        let saved = (d.array(forKey: "eqGains") as? [Double])?.map(Float.init)
-        gains = (saved?.count == 10 ? saved : nil) ?? Self.presets[1].gains
-        enabled = d.object(forKey: "eqEnabled") as? Bool ?? true
-        custom = (d.data(forKey: "eqCustom").flatMap { try? JSONDecoder().decode([EQPreset].self, from: $0) }) ?? []
-        for (i, band) in unit.bands.enumerated() {
-            band.filterType = .parametric
-            band.frequency = Self.frequencies[i]
-            band.bandwidth = 1.0
-            band.bypass = false
-        }
-        apply()
-    }
-
-    private func apply() {
-        let g = override?.gains ?? gains
-        for (i, band) in unit.bands.enumerated() { band.gain = enabled ? g[i] : 0 }
-    }
-
-    var allPresets: [EQPreset] { Self.presets + custom }
-    var activePreset: EQPreset? { allPresets.first { $0.gains == gains } }
-    var activeName: String { enabled ? (override?.name ?? activePreset?.name ?? "Custom") : "Off" }
-    var isFlat: Bool { (override?.gains ?? gains).allSatisfy { $0 == 0 } }
-    func preset(id: String) -> EQPreset? { allPresets.first { $0.id == id } }
-
-    func select(_ p: EQPreset) { enabled = true; gains = p.gains }
-    func saveCurrent(as name: String) {
-        let n = name.trimmingCharacters(in: .whitespaces)
-        custom.append(EQPreset(id: UUID().uuidString, name: n.isEmpty ? "My Preset" : n, gains: gains))
-    }
-    func delete(_ p: EQPreset) { custom.removeAll { $0.id == p.id } }
-    func rename(_ p: EQPreset, to name: String) {
-        if let i = custom.firstIndex(where: { $0.id == p.id }), !name.isEmpty { custom[i].name = name }
-    }
-    func overwrite(_ p: EQPreset) {
-        if let i = custom.firstIndex(where: { $0.id == p.id }) { custom[i].gains = gains }
     }
 }
