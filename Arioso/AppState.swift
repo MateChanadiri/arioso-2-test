@@ -153,6 +153,8 @@ final class AppSettings {
     var appearance: Int { didSet { d.set(appearance, forKey: "appearance") } }
     var listenBrainzEnabled: Bool { didSet { d.set(listenBrainzEnabled, forKey: "lbEnabled") } }
     var listenBrainzToken: String { didSet { d.set(listenBrainzToken, forKey: "lbToken") } }
+    var lastFmEnabled: Bool { didSet { d.set(lastFmEnabled, forKey: "lastFmEnabled") } }
+    var lastFmKey: String { didSet { d.set(lastFmKey, forKey: "lastFmKey") } }
     var autoLyrics: Bool { didSet { d.set(autoLyrics, forKey: "autoLyrics") } }
     var lyricsLanguage: String { didSet { d.set(lyricsLanguage, forKey: "lyricsLanguage") } }
 
@@ -202,6 +204,8 @@ final class AppSettings {
         appearance = d.integer(forKey: "appearance")
         listenBrainzEnabled = d.bool(forKey: "lbEnabled")
         listenBrainzToken = d.string(forKey: "lbToken") ?? ""
+        lastFmEnabled = d.bool(forKey: "lastFmEnabled")
+        lastFmKey = d.string(forKey: "lastFmKey") ?? ""
         autoLyrics = d.object(forKey: "autoLyrics") as? Bool ?? true
         lyricsLanguage = d.string(forKey: "lyricsLanguage") ?? "auto"
         continuationMode = d.string(forKey: "continuationMode").flatMap(ContinuationMode.init) ?? .shuffleLibrary
