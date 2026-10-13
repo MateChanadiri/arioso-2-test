@@ -9,24 +9,20 @@ import SwiftUI
 
 /// Kinds of music servers. The rest of the app talks to `MusicSourceClient`,
 /// so more server types can be added without touching the player or the library.
-nonisolated enum SourceKind: String, Codable, CaseIterable, Identifiable, Sendable {
-    case jellyfin
-    /// Anything speaking the Subsonic API: Navidrome, Gonic, Airsonic, Ampache, Nextcloud Music, …
-    case subsonic
-    case octave
+nonisolated enum SourceKind: String, Codable, CaseIterable, Identifiable {
+    case jellyfin, subsonic
+    
     var id: String { rawValue }
     var title: String {
         switch self {
         case .jellyfin: "Jellyfin"
         case .subsonic: "Subsonic / Navidrome"
-        case .octave: "Octave"
         }
     }
     var symbol: String {
         switch self {
         case .jellyfin: "server.rack"
-        case .subsonic: "music.note.house"
-        case .octave: "waveform"
+        case .subsonic: "hifispeaker.2"
         }
     }
 }
@@ -88,7 +84,7 @@ nonisolated enum SourceError: LocalizedError {
         case .badURL: "That doesn't look like a server address."
         case .unauthorized: "Wrong user name or password."
         case .server(let code): "The server answered with error \(code)."
-        case .decoding: "The server sent something \(Brand.name) doesn't understand."
+        case .decoding: "The server sent something the app doesn't understand."
         case .offline: "You're offline."
         }
     }
@@ -111,7 +107,7 @@ nonisolated protocol MusicSourceClient: Sendable {
 
 nonisolated enum Keychain {
     static func set(_ value: String, for key: String) {
-        let base: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: "\(Brand.name)", kSecAttrAccount as String: key]
+        let base: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: "Music", kSecAttrAccount as String: key]
         SecItemDelete(base as CFDictionary)
         var add = base
         add[kSecValueData as String] = Data(value.utf8)
@@ -120,7 +116,7 @@ nonisolated enum Keychain {
     }
 
     static func get(_ key: String) -> String? {
-        let q: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: "\(Brand.name)",
+        let q: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: "Music",
                                 kSecAttrAccount as String: key, kSecReturnData as String: true, kSecMatchLimit as String: kSecMatchLimitOne]
         var out: AnyObject?
         guard SecItemCopyMatching(q as CFDictionary, &out) == errSecSuccess, let data = out as? Data else { return nil }
@@ -128,7 +124,7 @@ nonisolated enum Keychain {
     }
 
     static func remove(_ key: String) {
-        let q: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: "\(Brand.name)", kSecAttrAccount as String: key]
+        let q: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: "Music", kSecAttrAccount as String: key]
         SecItemDelete(q as CFDictionary)
     }
 }
@@ -155,7 +151,7 @@ final class NetworkMonitor {
                 if came { self.onReconnect() }
             }
         }
-        monitor.start(queue: DispatchQueue(label: "arioso.network"))
+        monitor.start(queue: DispatchQueue(label: "music.network"))
     }
 }
 
@@ -173,7 +169,7 @@ nonisolated struct JellyfinClient: MusicSourceClient {
     }
 
     static func authHeader(token: String?) -> String {
-        var h = #"MediaBrowser Client="\#(Brand.name)", Device="iPhone", DeviceId="\#(deviceID)", Version="1.0""#
+        var h = #"MediaBrowser Client="Music", Device="iPhone", DeviceId="\#(deviceID)", Version="1.0""#
         if let token { h += #", Token="\#(token)""# }
         return h
     }
@@ -276,7 +272,6 @@ nonisolated struct JellyfinClient: MusicSourceClient {
         guard let s else { return nil }
         if let d = try? isoFrac.parse(s) { return d }
         if let d = try? isoPlain.parse(s) { return d }
-        // Jellyfin sends 7 fractional digits; trim to milliseconds.
         if let dot = s.firstIndex(of: "."), let z = s.lastIndex(where: { $0 == "Z" || $0 == "+" }), z > dot {
             let frac = s[s.index(after: dot)..<z].prefix(3)
             return try? isoFrac.parse(String(s[..<dot]) + "." + frac + String(s[z...]))
@@ -348,7 +343,6 @@ nonisolated struct JellyfinClient: MusicSourceClient {
                  "Container": "mp3,aac,m4a|aac,m4b|aac,flac,alac,m4a|alac,wav,aiff,aif",
                  "TranscodingContainer": "mp3", "TranscodingProtocol": "http", "AudioCodec": "mp3"]
         q["MaxStreamingBitrate"] = "\(maxBitrate ?? 999_999_999)"
-        // Also as a query item: the universal endpoint may redirect, and redirects can drop custom headers.
         q["api_key"] = token
         var req = request("Audio/\(remoteID)/universal", query: q)
         req.timeoutInterval = 60
@@ -416,7 +410,6 @@ nonisolated struct SubsonicClient: MusicSourceClient {
 
     static let apiVersion = "1.16.1"
 
-    /// Accepts "host:port", a full URL, or a URL someone copied with "/rest" at the end.
     static func normalize(_ raw: String) -> URL? {
         guard var s = JellyfinClient.normalize(raw)?.absoluteString else { return nil }
         if s.lowercased().hasSuffix("/rest") { s.removeLast(5) }
@@ -428,7 +421,7 @@ nonisolated struct SubsonicClient: MusicSourceClient {
 
     private static func authQuery(user: String, password: String, legacy: Bool) -> [URLQueryItem] {
         var q = [URLQueryItem(name: "u", value: user), URLQueryItem(name: "v", value: apiVersion),
-                 URLQueryItem(name: "c", value: "\(Brand.name)"), URLQueryItem(name: "f", value: "json")]
+                 URLQueryItem(name: "c", value: "Music"), URLQueryItem(name: "f", value: "json")]
         if legacy {
             q.append(URLQueryItem(name: "p", value: "enc:" + hex(Data(password.utf8))))
         } else {
@@ -445,7 +438,6 @@ nonisolated struct SubsonicClient: MusicSourceClient {
         guard var comps = URLComponents(string: account.baseURL + "/rest/" + endpoint + ".view") else { return nil }
         comps.queryItems = Self.authQuery(user: account.userName, password: password, legacy: account.legacyAuth == true)
             + params.sorted { $0.key < $1.key }.map { URLQueryItem(name: $0.key, value: $0.value) }
-        // "+" isn't escaped by URLComponents but most servers read it as a space.
         comps.percentEncodedQuery = comps.percentEncodedQuery?.replacingOccurrences(of: "+", with: "%2B")
         guard let url = comps.url else { return nil }
         var req = URLRequest(url: url)
@@ -453,7 +445,6 @@ nonisolated struct SubsonicClient: MusicSourceClient {
         return req
     }
 
-    /// Subsonic answers 200 even for errors; the real status sits inside the JSON envelope.
     private func call<T: Decodable>(_ endpoint: String, _ params: [String: String] = [:], as type: T.Type) async throws -> T {
         guard let req = request(endpoint, params) else { throw SourceError.badURL }
         let (data, resp) = try await URLSession.shared.data(for: req)
@@ -485,7 +476,6 @@ nonisolated struct SubsonicClient: MusicSourceClient {
         let error: APIError?
         let type: String?
     }
-    /// Some servers send ids as numbers, most as strings.
     private struct ID: Decodable {
         let value: String
         init(from decoder: Decoder) throws {
@@ -566,7 +556,6 @@ nonisolated struct SubsonicClient: MusicSourceClient {
                     artist: s.artist ?? s.displayAlbumArtist ?? "Unknown Artist",
                     album: s.album ?? "Unknown Album",
                     albumArtist: s.displayAlbumArtist,
-                    // Art is fetched by this id, so prefer the cover id; servers usually share it across an album.
                     albumID: s.coverArt?.value ?? s.albumId?.value,
                     imageTag: s.coverArt?.value,
                     duration: Double(s.duration ?? 0),
@@ -614,7 +603,6 @@ nonisolated struct SubsonicClient: MusicSourceClient {
         } catch {
             songs = []
         }
-        // Servers that don't list everything for an empty search get walked album by album.
         if songs.isEmpty { songs = try await allSongsByAlbum(progress: progress) }
 
         var seen = Set<String>()
@@ -631,7 +619,6 @@ nonisolated struct SubsonicClient: MusicSourceClient {
         return RemoteLibrary(tracks: tracks, playlists: playlists)
     }
 
-    /// Navidrome, Gonic and most OpenSubsonic servers return every song for an empty `search3` query.
     private func allSongsBySearch(progress: @escaping @Sendable (Int, Int) -> Void) async throws -> [Song] {
         let known = try? await call("getScanStatus", as: ScanStatus.self).scanStatus?.count
         var songs: [Song] = []
@@ -694,7 +681,6 @@ nonisolated struct SubsonicClient: MusicSourceClient {
         request("getCoverArt", ["id": itemID, "size": "\(maxSide)"])
     }
 
-    /// OpenSubsonic `songLyrics` extension; older servers simply don't have it.
     @concurrent
     func lyrics(remoteID: String) async -> String? {
         guard let list = try? await call("getLyricsBySongId", ["id": remoteID], as: Lyrics.self).lyricsList?.structuredLyrics,
@@ -718,7 +704,6 @@ nonisolated struct SubsonicClient: MusicSourceClient {
         _ = try await call("scrobble", ["id": remoteID, "submission": "true"], as: Empty.self)
     }
 
-    /// Shows up as "now playing" on the server; the finished play is sent by `markPlayed`.
     @concurrent
     func reportPlayback(remoteID: String, started: Bool, positionSeconds: Double) async {
         guard started else { return }
@@ -752,7 +737,6 @@ final class SourceManager {
     private(set) var pending: [SyncOp] = [] { didSet { savePending() } }
 
     var autoSync: Bool { didSet { UserDefaults.standard.set(autoSync, forKey: "autoSync") } }
-    /// kbit/s; 0 = original quality.
     var streamBitrate: Int { didSet { UserDefaults.standard.set(streamBitrate, forKey: "streamBitrate") } }
     var downloadBitrate: Int { didSet { UserDefaults.standard.set(downloadBitrate, forKey: "downloadBitrate") } }
     var cellularBitrate: Int { didSet { UserDefaults.standard.set(cellularBitrate, forKey: "cellularBitrate") } }
@@ -783,7 +767,6 @@ final class SourceManager {
         switch acc.kind {
         case .jellyfin: return JellyfinClient(account: acc, token: token)
         case .subsonic: return SubsonicClient(account: acc, password: token)
-        case .octave: return OctaveClient(account: acc, key: token)
         }
     }
 
@@ -799,36 +782,12 @@ final class SourceManager {
         await sync(account.id)
     }
 
-    /// Subsonic signs every request with the password, so the Keychain keeps the password instead of a token.
     func addSubsonic(server: String, user: String, password: String) async throws {
         let account = try await SubsonicClient.login(server: server, user: user, password: password)
         Keychain.set(password, for: "token:\(account.id)")
         accounts.removeAll { $0.id == account.id }
         accounts.append(account)
         await sync(account.id)
-    }
-
-    func addOctave(key: String) async throws {
-        let key = key.trimmingCharacters(in: .whitespacesAndNewlines)
-        let account = try await OctaveClient.login(key: key)
-        Keychain.set(key, for: "token:\(account.id)")
-        accounts.removeAll { $0.id == account.id }
-        accounts.append(account)
-        await sync(account.id)
-    }
-
-    func importOctave(_ songs: [OctaveClient.Song], sourceID: String) {
-        guard account(sourceID)?.kind == .octave else { return }
-        let existing = library.tracks.filter { $0.sourceID == sourceID }
-        let byID = Dictionary(existing.compactMap { t in t.remoteID.map { ($0, t) } }, uniquingKeysWith: { a, _ in a })
-        library.upsert(songs.map { song in
-            var t = byID[song.id] ?? Track(title: song.title, artist: song.artist.name,
-                album: song.album.title, duration: song.duration, path: "")
-            t.sourceID = sourceID; t.remoteID = song.id
-            t.remoteAlbumID = song.album.cover_big; t.remoteImageTag = song.album.cover_big
-            return t
-        })
-        Task { await ArtworkFetcher.shared.fetchMissing(library: library, sources: self) }
     }
 
     func remove(_ id: String) {
@@ -878,7 +837,6 @@ final class SourceManager {
         Task { await ArtworkFetcher.shared.fetchMissing(library: library, sources: self) }
     }
 
-    /// Upserts remote songs by their server id, keeps local play counts, removes what's gone from the server.
     private func apply(_ remote: RemoteLibrary, for sourceID: String) {
         let existing = library.tracks.filter { $0.sourceID == sourceID }
         var byRemote: [String: Track] = [:]
@@ -907,7 +865,7 @@ final class SourceManager {
             t.remoteID = r.remoteID
             t.remoteAlbumID = r.albumID
             if t.remoteImageTag != r.imageTag { t.remoteImageTag = r.imageTag; if byRemote[r.remoteID] != nil { t.hasArtwork = t.hasArtwork && r.imageTag != nil } }
-            t.isFavorite = (account(sourceID)?.kind == .octave ? t.isFavorite || r.isFavorite : r.isFavorite) || pending.contains { $0.remoteID == r.remoteID && $0.kind == .favorite }
+            t.isFavorite = r.isFavorite || pending.contains { $0.remoteID == r.remoteID && $0.kind == .favorite }
             if pending.contains(where: { $0.remoteID == r.remoteID && $0.kind == .unfavorite }) { t.isFavorite = false }
             t.playCount = max(t.playCount ?? 0, r.playCount)
             if let lp = r.lastPlayed, lp > (t.lastPlayed ?? .distantPast) { t.lastPlayed = lp }
@@ -919,7 +877,6 @@ final class SourceManager {
         if !gone.isEmpty { library.delete(gone) }
         library.upsert(result)
 
-        // Playlists from the server become (read-only mirrored) Arioso playlists.
         let idByRemote = Dictionary(result.compactMap { t in t.remoteID.map { ($0, t.id) } }, uniquingKeysWith: { a, _ in a })
         var lists = library.playlists
         for rp in remote.playlists {
@@ -937,20 +894,20 @@ final class SourceManager {
     }
 
     private func clientKindAllowsRemoval(_ sourceID: String) -> Bool {
-        account(sourceID)?.kind != .octave
+        true
     }
 
     // MARK: Favorites / plays (queued while offline)
 
     func favoriteChanged(_ track: Track) {
-        guard track.isRemote, let r = track.remoteID, let s = track.sourceID, account(s) != nil, account(s)?.kind != .octave else { return }
+        guard track.isRemote, let r = track.remoteID, let s = track.sourceID, account(s) != nil else { return }
         pending.removeAll { $0.remoteID == r && ($0.kind == .favorite || $0.kind == .unfavorite) }
         pending.append(SyncOp(kind: track.isFavorite ? .favorite : .unfavorite, sourceID: s, remoteID: r))
         Task { await flushPending() }
     }
 
     func played(_ track: Track) {
-        guard track.isRemote, let r = track.remoteID, let s = track.sourceID, account(s) != nil, account(s)?.kind != .octave else { return }
+        guard track.isRemote, let r = track.remoteID, let s = track.sourceID, account(s) != nil else { return }
         pending.append(SyncOp(kind: .played, sourceID: s, remoteID: r))
         Task { await flushPending() }
     }
@@ -994,10 +951,8 @@ final class ArtworkFetcher {
     static let shared = ArtworkFetcher()
     private var running = false
     private var runningModules = false
-    /// Covers that failed this session; not asked for again until the next launch.
     private var failed = Set<String>()
 
-    /// Cover links from modules: one download per distinct image, linked for every song that uses it.
     func fetchModuleCovers(library: LibraryStore) async {
         guard !runningModules, NetworkMonitor.shared.isOnline else { return }
         runningModules = true
@@ -1017,7 +972,6 @@ final class ArtworkFetcher {
         }
     }
 
-    /// Downloads album art once per album and hard-links it for every song of that album (no extra space).
     func fetchMissing(library: LibraryStore, sources: SourceManager) async {
         guard !running, NetworkMonitor.shared.isOnline else { return }
         running = true
@@ -1041,7 +995,7 @@ final class ArtworkFetcher {
                         try? FileManager.default.copyItem(at: Paths.artworkURL(for: first.id), to: Paths.artworkURL(for: t.id))
                     }
                 }
-                    done.append(t)
+                done.append(t)
             }
             if done.count > 200 { mark(done); done.removeAll() }
         }
@@ -1052,115 +1006,4 @@ final class ArtworkFetcher {
             for t in list { ArtworkCache.evict(t.id) }
         }
     }
-}
-
-// MARK: - Octave
-
-nonisolated struct OctaveClient: MusicSourceClient {
-    let account: SourceAccount
-    let key: String
-    static let base = URL(string: "https://api.octavestreaming.com")!
-
-    struct Song: Decodable, Identifiable, Sendable {
-        let id: String
-        let title: String
-        let artist: Artist
-        let album: Album
-        let duration: Double
-        struct Artist: Decodable, Sendable { let name: String }
-        struct Album: Decodable, Sendable {
-            let title: String
-            let cover_big: String?
-        }
-        var remote: RemoteTrack {
-            RemoteTrack(remoteID: id, title: title, artist: artist.name, album: album.title,
-                albumID: album.cover_big, imageTag: album.cover_big, duration: duration,
-                trackNumber: 0, isFavorite: false, playCount: 0)
-        }
-    }
-
-    private static func get<T: Decodable>(_ path: String, key: String? = nil, query: [URLQueryItem] = []) async throws -> T {
-        var url = URLComponents(url: base.appendingPathComponent(path), resolvingAgainstBaseURL: false)!
-        if !query.isEmpty { url.queryItems = query }
-        var request = URLRequest(url: url.url!)
-        request.timeoutInterval = 30
-        if let key { request.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization") }
-        let (data, response) = try await URLSession.shared.data(for: request)
-        guard let response = response as? HTTPURLResponse else { throw SourceError.decoding }
-        guard (200..<300).contains(response.statusCode) else {
-            if response.statusCode == 401 || response.statusCode == 403 {
-                throw SourceError.api(response.statusCode, "Octave rejected the account key. Copy your key from your Octave account settings.")
-            }
-            throw SourceError.server(response.statusCode)
-        }
-        return try JSONDecoder().decode(T.self, from: data)
-    }
-
-    static func login(key: String) async throws -> SourceAccount {
-        struct Me: Decodable { let ok: Bool; let userId: String? }
-        let me: Me = try await get("api/account/me", key: key)
-        guard me.ok, let id = me.userId else { throw SourceError.unauthorized }
-        return SourceAccount(id: "octave:\(id)", kind: .octave, name: "Octave", baseURL: base.absoluteString,
-            userID: id, userName: "Octave account", serverID: "octave")
-    }
-
-    func search(_ query: String) async throws -> [Song] {
-        struct Results: Decodable { let results: [Song] }
-        let result: Results = try await Self.get("api/search/tracks", query: [
-            URLQueryItem(name: "query", value: query), URLQueryItem(name: "limit", value: "50")])
-        return result.results
-    }
-
-    func fetchLibrary(progress: @escaping @Sendable (Int, Int) -> Void) async throws -> RemoteLibrary {
-        // Octave sync stores the web app's persisted library under its storage key.
-        struct Sync: Decodable {
-            let data: Payload?
-            struct Payload: Decodable {
-                let library: Stored?
-                enum CodingKeys: String, CodingKey { case library = "octave:library" }
-            }
-            struct Stored: Decodable { let state: State }
-            struct State: Decodable { let playlists: [List]?; let recentTracks: [Song]? }
-            struct List: Decodable { let id: String; let name: String; let tracks: [Song] }
-        }
-        let sync: Sync = try await Self.get("api/sync", key: key)
-        let state = sync.data?.library?.state
-        let lists = state?.playlists ?? []
-        var songs = state?.recentTracks ?? []
-        songs.append(contentsOf: lists.flatMap(\.tracks))
-        var seen = Set<String>()
-        let unique = songs.filter { $0.id.allSatisfy(\.isNumber) && !$0.id.isEmpty && seen.insert($0.id).inserted }
-        let liked = Set(lists.filter { $0.id == "liked" }.flatMap(\.tracks).map(\.id))
-        progress(unique.count, unique.count)
-        return RemoteLibrary(tracks: unique.map { song in
-            var remote = song.remote; remote.isFavorite = liked.contains(song.id); return remote
-        }, playlists: lists.map { RemotePlaylist(remoteID: $0.id, name: $0.name, trackRemoteIDs: $0.tracks.map(\.id)) })
-    }
-
-    func playbackRequest(remoteID: String, maxBitrate: Int?) async throws -> URLRequest {
-        struct Token: Decodable { let token: String?; let gated: Bool? }
-        let token: Token = try await Self.get("api/playback-token", key: key)
-        if token.gated == true && token.token == nil {
-            throw SourceError.api(403, "Octave requires an account with playback access. Check your account on music.octavestreaming.com.")
-        }
-        let quality = maxBitrate == nil || maxBitrate == 0 ? "lossless" : ((maxBitrate ?? 320_000) <= 128_000 ? "128" : "320")
-        var url = URLComponents(url: Self.base.appendingPathComponent("audio/\(quality)"), resolvingAgainstBaseURL: false)!
-        url.queryItems = [URLQueryItem(name: "track", value: remoteID)]
-        if let token = token.token { url.queryItems?.append(URLQueryItem(name: "k", value: token)) }
-        var request = URLRequest(url: url.url!)
-        request.timeoutInterval = 120
-        return request
-    }
-
-    func audioRequest(remoteID: String, maxBitrate: Int?) -> URLRequest? { nil }
-    func imageRequest(itemID: String, maxSide: Int) -> URLRequest? {
-        guard let url = URL(string: itemID), url.scheme == "https" else { return nil }
-        return URLRequest(url: url)
-    }
-    func lyrics(remoteID: String) async -> String? { nil }
-    // Changes stay local; Octave's sync API replaces a versioned account snapshot.
-    func setFavorite(remoteID: String, _ on: Bool) async throws {}
-    func markPlayed(remoteID: String) async throws {}
-    func reportPlayback(remoteID: String, started: Bool, positionSeconds: Double) async {}
-    func instantMix(remoteID: String, limit: Int) async throws -> [String] { [] }
 }
