@@ -2,23 +2,17 @@ import SwiftUI
 
 // MARK: - Links
 
-/// Where Arioso lives online. Ko-fi is reached through the website, never linked from the app.
 enum Links {
     static let website = URL(string: "https://mrsc.pages.dev")!
     static let github = URL(string: "https://github.com/Henkek221/mrsc")!
-    static let discord = URL(string: "https://discord.gg/kZTTJxjvQW")!
 }
 
 // MARK: - Website look
 
-/// The website's palette (website/styles.css), so the welcome flow reads like mrsc.pages.dev. Adapts to dark mode.
 enum Site {
-    /// #6e6e73: ledes and quiet buttons.
     static let ink2 = dynamic(0x6E6E73, 0xA1A1A6)
-    /// White cards that lift off the page (the search pill).
     static let card = dynamic(0xFFFFFF, 0x2C2C2E)
 
-    /// The provider runs on whatever thread SwiftUI renders on, so it must not be tied to the main actor.
     static func dynamic(_ light: UInt32, _ dark: UInt32) -> Color {
         Color(uiColor: UIColor { @Sendable traits in
             traits.userInterfaceStyle == .dark ? UIColor(siteRGB: dark) : UIColor(siteRGB: light)
@@ -33,21 +27,17 @@ private extension UIColor {
 }
 
 extension View {
-    /// The website's headlines: bold with tight tracking.
     func siteHeadline(_ size: CGFloat) -> some View {
         font(.system(size: size, weight: .bold)).tracking(-size * 0.04)
     }
 
-    /// The grey lede under a headline.
     func siteLede(_ size: CGFloat = 18) -> some View {
         font(.system(size: size, weight: .medium)).tracking(-size * 0.016).foregroundStyle(Site.ink2)
     }
 }
 
-/// The website's top bar: the icon and the name on the left, one quiet action on the right.
 struct SiteNav<Trailing: View>: View {
     @AppStorage(BrandStyle.key) private var brand = BrandStyle.red.rawValue
-    /// On a red page the icon turns white with red letters and the name turns white.
     var onRed = false
     @ViewBuilder var trailing: Trailing
 
@@ -56,7 +46,7 @@ struct SiteNav<Trailing: View>: View {
         HStack(spacing: 9) {
             AppIconMark(color: onRed ? .white : brandColor, ink: onRed ? brandColor : .white)
                 .frame(width: 28, height: 28)
-            Text("\(Brand.name)")
+            Text("Music")
                 .foregroundStyle(onRed ? .white : .primary)
                 .font(.system(size: 18, weight: .bold))
                 .tracking(-0.36)
@@ -68,7 +58,6 @@ struct SiteNav<Trailing: View>: View {
     }
 }
 
-/// The app icon drawn live: the brand colour and the brushed MR/SC letters from the splash.
 struct AppIconMark: View {
     var color: Color = BrandStyle.current.color
     var ink: Color = .white
@@ -85,7 +74,6 @@ struct AppIconMark: View {
     }
 }
 
-/// The website's glass pill, centred rather than edge to edge: red with white type, or white with red type on red.
 struct SitePill: View {
     let title: String
     var onRed = false
@@ -113,12 +101,10 @@ struct SitePill: View {
 
 // MARK: - App Store look
 
-/// The three page colors of the onboarding, as in the App Store screenshots.
 enum PageTone {
     case paper, red, wine
 
     var colored: Bool { self != .paper }
-    /// Headlines and ledes.
     var ink: Color { colored ? .white : .primary }
     var lede: Color { colored ? .white.opacity(0.86) : Site.ink2 }
 
@@ -142,7 +128,6 @@ enum PageTone {
 }
 
 extension View {
-    /// The App Store headline: black weight, tight tracking.
     func heroHeadline(_ size: CGFloat) -> some View {
         font(.system(size: size, weight: .black)).tracking(-size * 0.045)
     }
@@ -150,8 +135,6 @@ extension View {
 
 // MARK: - Welcome
 
-/// First run, laid out like the website's hero: the record you can spin, a red kicker, the big line, a red pill.
-/// "See what it can do" pages through four features first; both roads end at "Where's your music?".
 struct OnboardingView: View {
     @Environment(Router.self) private var router
     @Environment(LibraryStore.self) private var library
@@ -161,7 +144,6 @@ struct OnboardingView: View {
     private enum Stage { case hello, tour, sources }
     @State private var stage: Stage = .hello
 
-    // Choreography flags, flipped one after another.
     @State private var recordIn = false
     @State private var heroTitle = false
     @State private var heroLede = false
@@ -171,7 +153,6 @@ struct OnboardingView: View {
     @State private var rowsIn = false
     @State private var chosen: OnboardingSource?
 
-    // Record physics.
     @State private var spin = SpinModel()
     @State private var dragAngle: Double?
     @State private var grab: (touch: Double, disc: Double, travelled: Double)?
@@ -207,7 +188,6 @@ struct OnboardingView: View {
 
     private var hero: some View {
         GeometryReader { geo in
-            // The record takes whatever height the copy leaves over.
             let disc = min(geo.size.width * 0.66, 270, max(150, geo.size.height - 490))
             VStack(spacing: 0) {
                 SiteNav(onRed: true) { laterButton(onRed: true).opacity(ctaIn ? 1 : 0) }
@@ -222,7 +202,7 @@ struct OnboardingView: View {
                         .tracking(-0.25)
                         .foregroundStyle(.white.opacity(0.86))
                         .textRenderer(BlurReveal(progress: heroTitle ? 1 : 0))
-                    Text("The music player with way too many settings.")
+                    Text("Sound. Your way.")
                         .heroHeadline(38)
                         .foregroundStyle(.white)
                         .textRenderer(BlurReveal(progress: heroTitle ? 1 : 0))
@@ -268,14 +248,12 @@ struct OnboardingView: View {
             .foregroundStyle(onRed ? .white.opacity(0.8) : Site.ink2)
     }
 
-    /// The toy from the website: grab it, spin it, flick it. Floats like the website's hero icon, with the same red glow.
     private func record(size: CGFloat) -> some View {
         return TimelineView(.animation(paused: reduceMotion && dragAngle == nil)) { ctx in
             let t = ctx.date.timeIntervalSinceReferenceDate
             let angle = dragAngle ?? spin.angle(at: ctx.date)
             let float = reduceMotion ? 0 : 3 * (1 - cos(t * .pi / 3))
             ZStack {
-                // Deep red shadow under the record, like the 3D objects on the red pages.
                 Circle()
                     .fill(Color(red: 0.35, green: 0, blue: 0.08))
                     .frame(width: size * 0.78, height: size * 0.78)
@@ -298,11 +276,10 @@ struct OnboardingView: View {
         .accessibilityHidden(true)
     }
 
-    /// Grab the record and spin it; it keeps the momentum and eases back to its idle turn.
     private var spinGesture: some Gesture {
         DragGesture(minimumDistance: 0, coordinateSpace: .global)
             .onChanged { v in
-                let a = Double(atan2(v.location.y - recordCenter.y, v.location.x - recordCenter.x)) * 180 / Double.pi
+                let a = atan2(v.location.y - recordCenter.y, v.location.x - recordCenter.x) * 180 / .pi
                 let now = Date()
                 if grab == nil {
                     grab = (a, spin.angle(at: now), 0)
@@ -336,7 +313,6 @@ struct OnboardingView: View {
 
     // MARK: Sources
 
-    /// The record from the start screen above four plain rows. Pick one and its symbol lands on the label.
     private var sources: some View {
         GeometryReader { geo in
             let disc = min(geo.size.width * 0.42, 170, max(110, geo.size.height - 560))
@@ -348,7 +324,7 @@ struct OnboardingView: View {
                 Spacer(minLength: 20)
 
                 VStack(spacing: 12) {
-                    Text("Where’s your music?")
+                    Text("Where's your music?")
                         .heroHeadline(36)
                         .textRenderer(BlurReveal(progress: sourcesTitle ? 1 : 0))
                     Text(chosen == nil ? "Pick one. You can add the rest later." : "Nice. Getting it ready…")
@@ -368,16 +344,7 @@ struct OnboardingView: View {
                     }
                 }
                 .padding(.horizontal, 20)
-
-                Button { finish { Task { await library.loadDemo() } } } label: {
-                    Text("Or start with the demo library")
-                        .font(.system(size: 15, weight: .medium))
-                        .foregroundStyle(Site.ink2)
-                        .frame(height: 44)
-                }
-                .opacity(rowsIn && chosen == nil ? 1 : 0)
-                .padding(.top, 6)
-                .padding(.bottom, 4)
+                .padding(.bottom, 40)
             }
         }
     }
@@ -404,245 +371,301 @@ struct OnboardingView: View {
                 Spacer(minLength: 8)
                 Image(systemName: isChosen ? "checkmark" : "chevron.right")
                     .font(.system(size: 14, weight: .bold))
-                    .foregroundStyle(isChosen ? Theme.accent : Color(uiColor: .tertiaryLabel))
-                    .contentTransition(.symbolEffect(.replace))
+                    .foregroundStyle(isChosen ? Theme.accent : Site.ink2)
             }
             .padding(.horizontal, 14)
             .frame(height: 66)
-            .contentShape(Rectangle())
-            .background(Color(uiColor: .secondarySystemBackground), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+            .background(Site.card, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .shadow(color: .black.opacity(isChosen ? 0.12 : 0.05), radius: isChosen ? 14 : 8, y: isChosen ? 6 : 3)
+            .scaleEffect(isChosen ? 1.02 : 1)
+            .opacity(other ? 0.5 : 1)
         }
-        .buttonStyle(PressScale())
-        .opacity(rowsIn ? (other ? 0.35 : 1) : 0)
-        .offset(y: rowsIn || reduceMotion ? 0 : 24)
-        .animation(.spring(duration: 0.7, bounce: 0.25).delay(rowsIn && chosen == nil ? Double(i) * 0.06 : 0), value: rowsIn)
-        .animation(.smooth(duration: 0.35), value: chosen)
-        .allowsHitTesting(chosen == nil)
-        .accessibilityLabel("\(source.title), \(source.detail)")
+        .buttonStyle(.plain)
+        .opacity(rowsIn ? 1 : 0)
+        .offset(y: rowsIn ? 0 : 16)
+        .animation(.smooth(duration: 0.45).delay(Double(i) * 0.07), value: rowsIn)
+        .animation(.spring(duration: 0.45, bounce: 0.3), value: chosen)
     }
 
     // MARK: Flow
 
-    private func choreograph() async {
-        if reduceMotion {
-            recordIn = true; heroTitle = true; heroLede = true; ctaIn = true
-            return
-        }
-        spin.reset(at: .now, angle: -40, velocity: 260)
-        try? await Task.sleep(for: .milliseconds(150))
-        withAnimation(.spring(duration: 1.1, bounce: 0.22)) { recordIn = true }
-        try? await Task.sleep(for: .milliseconds(380))
-        withAnimation(.linear(duration: 0.9)) { heroTitle = true }
-        try? await Task.sleep(for: .milliseconds(300))
-        withAnimation(.linear(duration: 1.0)) { heroLede = true }
-        try? await Task.sleep(for: .milliseconds(450))
-        withAnimation(.spring(duration: 0.7, bounce: 0.2)) { ctaIn = true }
-    }
-
-    /// "Play my music": the record spins up, then the sources come in.
     private func start() {
-        kick += 1
-        spin.reset(at: .now, angle: spin.angle(at: .now), velocity: reduceMotion ? 0 : 900)
-        Task {
-            try? await Task.sleep(for: .milliseconds(reduceMotion ? 0 : 280))
-            toSources()
+        finish {
+            router.showOnboarding = false
+            onboarded = true
         }
     }
 
-    /// "See what it can do": the feature pages slide up over the hero.
     private func showTour() {
         kick += 1
-        withAnimation(.spring(duration: 0.6, bounce: 0.1)) { stage = .tour }
+        withAnimation(.smooth(duration: 0.5)) { stage = .tour }
     }
 
     private func toSources() {
-        kick += 1
-        sourcesTitle = false
-        sourcesLede = false
-        rowsIn = false
-        withAnimation(.spring(duration: 0.6, bounce: 0.12)) { stage = .sources }
-        Task {
-            try? await Task.sleep(for: .milliseconds(reduceMotion ? 0 : 220))
-            withAnimation(.linear(duration: reduceMotion ? 0 : 0.7)) { sourcesTitle = true }
-            try? await Task.sleep(for: .milliseconds(reduceMotion ? 0 : 160))
-            withAnimation(.linear(duration: reduceMotion ? 0 : 0.8)) { sourcesLede = true }
-            rowsIn = true
-        }
+        withAnimation(.smooth(duration: 0.5)) { stage = .sources }
+        Task { await choreographSources() }
     }
 
-    /// The record takes the source's color and symbol and spins up, the other rows step back, then the real step opens.
     private func choose(_ source: OnboardingSource) {
-        guard chosen == nil else { return }
         chosen = source
-        spin.reset(at: .now, angle: spin.angle(at: .now), velocity: reduceMotion ? 0 : 900)
         Task {
-            try? await Task.sleep(for: .milliseconds(900))
+            try? await Task.sleep(for: .seconds(1.1))
             finish {
                 switch source {
-                case .iphone: router.startImport(.audioFiles)
-                case .folder: router.startImport(.musicFolder)
-                case .server: router.openAddMusic(atServer: true)
-                case .list: router.startSongListImport()
+                case .local: router.openAddMusic()
+                case .server: router.showSettings = true
                 }
             }
         }
     }
 
-    private func finish(_ then: () -> Void) {
+    private func finish(_ action: @escaping () -> Void) {
         onboarded = true
-        router.showOnboarding = false
-        then()
+        withAnimation(.smooth(duration: 0.45)) {
+            router.showOnboarding = false
+        }
+        Task {
+            try? await Task.sleep(for: .milliseconds(450))
+            action()
+        }
+    }
+
+    // MARK: Choreography
+
+    private func choreograph() async {
+        guard !reduceMotion else {
+            recordIn = true; heroTitle = true; heroLede = true; ctaIn = true
+            return
+        }
+        try? await Task.sleep(for: .milliseconds(250))
+        withAnimation(.spring(duration: 0.9, bounce: 0.35)) { recordIn = true }
+        try? await Task.sleep(for: .milliseconds(450))
+        withAnimation(.smooth(duration: 0.7)) { heroTitle = true }
+        try? await Task.sleep(for: .milliseconds(250))
+        withAnimation(.smooth(duration: 0.7)) { heroLede = true }
+        try? await Task.sleep(for: .milliseconds(350))
+        withAnimation(.smooth(duration: 0.6)) { ctaIn = true }
+    }
+
+    private func choreographSources() async {
+        guard !reduceMotion else {
+            sourcesTitle = true; sourcesLede = true; rowsIn = true
+            return
+        }
+        try? await Task.sleep(for: .milliseconds(300))
+        withAnimation(.smooth(duration: 0.7)) { sourcesTitle = true }
+        try? await Task.sleep(for: .milliseconds(250))
+        withAnimation(.smooth(duration: 0.7)) { sourcesLede = true }
+        try? await Task.sleep(for: .milliseconds(300))
+        withAnimation(.smooth(duration: 0.5)) { rowsIn = true }
     }
 }
 
-// MARK: - Sources
+// MARK: - Onboarding sources
 
-enum OnboardingSource: String, CaseIterable, Identifiable {
-    case iphone, folder, server, list
-    var id: String { rawValue }
+enum OnboardingSource: String, CaseIterable {
+    case local, server
+
     var title: String {
         switch self {
-        case .iphone: "This iPhone"
-        case .folder: "A Folder"
-        case .server: "My Server"
-        case .list: "A Song List"
+        case .local: "Songs on my iPhone"
+        case .server: "Jellyfin · Subsonic"
         }
     }
+
     var detail: String {
         switch self {
-        case .iphone: "Files & iCloud Drive"
-        case .folder: "Stays in sync"
-        case .server: "Jellyfin · Navidrome"
-        case .list: "Paste “Artist – Title”"
+        case .local: "Import files from the Files app, AirDrop, or other apps."
+        case .server: "Stream from your own server. Subsonic, Navidrome, Jellyfin and more."
         }
     }
+
     var symbol: String {
         switch self {
-        case .iphone: "iphone"
-        case .folder: "folder"
+        case .local: "iphone"
         case .server: "server.rack"
-        case .list: "text.alignleft"
         }
     }
+
     var color: Color {
         switch self {
-        case .iphone: Color(hex: "#66CCD6")
-        case .folder: Color(hex: "#F7A34D")
-        case .server: Color(hex: "#9E8CFA")
-        case .list: Color(hex: "#F5738F")
+        case .local: Theme.accent
+        case .server: .indigo
         }
     }
 }
 
-// MARK: - Record
+// MARK: - Tour
 
-/// A vinyl record: grooves and rim drawn once, a label that turns with the disc,
-/// and a sheen that stays put like light from a lamp above.
-struct VinylDisc: View {
-    var angle: Angle
-    var label: Color
-    var symbol: String? = nil
-    var side = "SIDE A · 33⅓"
-    var light = false
-    /// Colored vinyl instead of black.
-    var tint: Color? = nil
+struct TourDeck: View {
+    let onFinish: () -> Void
+    @State private var index = 0
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    /// Wider gaps between the grooves mark the tracks, as fractions of the radius.
-    private static let gaps: [Double] = [0.86, 0.78, 0.7, 0.62, 0.54]
+    private let pages: [(title: String, lede: String, symbol: String, colors: [Color])] = [
+        ("Customize everything.", "Change fonts, colors, layouts, animations — make it yours.", "paintpalette.fill", [.pink, .purple]),
+        ("Lyrics that move.", "Word-by-word karaoke, synced to your songs, translated on device.", "quote.bubble.fill", [.orange, .red]),
+        ("Your library, organized.", "Smart playlists, auto-tagging, and analysis that actually helps.", "square.stack.3d.up.fill", [.teal, .blue]),
+        ("No ads. No account.", "Free and open source. Your music stays on your device.", "lock.shield.fill", [.green, .mint])
+    ]
 
     var body: some View {
-        GeometryReader { geo in
-            let s = min(geo.size.width, geo.size.height)
+        VStack(spacing: 0) {
+            Spacer(minLength: 40)
+
             ZStack {
-                Canvas { ctx, size in
-                    let r = min(size.width, size.height) / 2
-                    let c = CGPoint(x: size.width / 2, y: size.height / 2)
-                    let disc = Path(ellipseIn: CGRect(x: c.x - r, y: c.y - r, width: r * 2, height: r * 2))
-                    let colors = tint.map { [$0.mix(with: .white, by: 0.25), $0, $0.mix(with: .black, by: 0.45)] } ?? [Color(white: 0.11), Color(white: 0.055)]
-                    ctx.fill(disc, with: .radialGradient(Gradient(colors: colors), center: c, startRadius: 0, endRadius: r))
-                    let inner = r * 0.38
-                    var radius = inner
-                    var i = 0
-                    while radius < r - 5 {
-                        // Slightly uneven grooves read as real vinyl; a few wider gaps mark the tracks.
-                        let gap = Self.gaps.contains { abs(radius / r - $0) < 0.006 }
-                        let o = gap ? 0.0 : 0.03 + 0.025 * (0.5 + 0.5 * sin(Double(i) * 1.7))
-                        ctx.stroke(Path(ellipseIn: CGRect(x: c.x - radius, y: c.y - radius, width: radius * 2, height: radius * 2)),
-                                   with: .color(.white.opacity(o)), lineWidth: 0.6)
-                        radius += 1.9
-                        i += 1
+                ForEach(Array(pages.enumerated()), id: \.offset) { i, page in
+                    if i == index {
+                        tourCard(page)
+                            .transition(.asymmetric(
+                                insertion: .move(edge: .trailing).combined(with: .opacity),
+                                removal: .move(edge: .leading).combined(with: .opacity)
+                            ))
+                            .id(i)
                     }
-                    ctx.stroke(Path(ellipseIn: CGRect(x: c.x - r + 0.5, y: c.y - r + 0.5, width: r * 2 - 1, height: r * 2 - 1)),
-                               with: .color(.white.opacity(0.14)), lineWidth: 1)
                 }
-
-                // Fixed light: two soft wedges across the grooves.
-                Circle()
-                    .fill(AngularGradient(stops: [
-                        .init(color: .clear, location: 0.0),
-                        .init(color: .white.opacity(0.13), location: 0.09),
-                        .init(color: .clear, location: 0.2),
-                        .init(color: .clear, location: 0.5),
-                        .init(color: .white.opacity(0.08), location: 0.59),
-                        .init(color: .clear, location: 0.7),
-                        .init(color: .clear, location: 1.0)
-                    ], center: .center, angle: .degrees(-30)))
-                    .blendMode(.plusLighter)
-
-                RecordLabel(color: label, symbol: symbol, side: side)
-                    .frame(width: s * 0.35, height: s * 0.35)
-                    .rotationEffect(angle)
             }
-            .frame(width: s, height: s)
-            .shadow(color: .black.opacity(light ? 0.28 : 0.6), radius: s * 0.08, y: s * 0.05)
+            .frame(maxWidth: .infinity)
+            .padding(.horizontal, 24)
+
+            Spacer(minLength: 20)
+
+            HStack(spacing: 8) {
+                ForEach(pages.indices, id: \.self) { i in
+                    Capsule()
+                        .fill(i == index ? Theme.accent : Color.white.opacity(0.3))
+                        .frame(width: i == index ? 24 : 8, height: 8)
+                        .animation(.smooth(duration: 0.35), value: index)
+                }
+            }
+            .padding(.bottom, 16)
+
+            HStack(spacing: 14) {
+                if index > 0 {
+                    Button {
+                        withAnimation(.smooth(duration: 0.45)) { index -= 1 }
+                    } label: {
+                        Image(systemName: "chevron.left")
+                            .font(.system(size: 15, weight: .bold))
+                            .foregroundStyle(.white)
+                            .frame(width: 44, height: 44)
+                            .glassEffect(.regular.interactive(), in: .circle)
+                    }
+                    .buttonStyle(.plain)
+                }
+                Spacer()
+                Button {
+                    if index < pages.count - 1 {
+                        withAnimation(.smooth(duration: 0.45)) { index += 1 }
+                    } else {
+                        onFinish()
+                    }
+                } label: {
+                    Text(index < pages.count - 1 ? "Next" : "Get Started")
+                        .font(.system(size: 17, weight: .semibold))
+                        .foregroundStyle(Theme.accent)
+                        .frame(minWidth: 120)
+                        .padding(.horizontal, 12)
+                }
+                .buttonStyle(.glassProminent)
+                .tint(.white)
+                Spacer()
+                if index < pages.count - 1 {
+                    Button {
+                        withAnimation(.smooth(duration: 0.45)) { index = pages.count - 1 }
+                    } label: {
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 15, weight: .bold))
+                            .foregroundStyle(.white)
+                            .frame(width: 44, height: 44)
+                            .glassEffect(.regular.interactive(), in: .circle)
+                    }
+                    .buttonStyle(.plain)
+                } else {
+                    Color.clear.frame(width: 44, height: 44)
+                }
+            }
+            .padding(.horizontal, 24)
+            .padding(.bottom, 12)
+        }
+    }
+
+    private func tourCard(_ page: (title: String, lede: String, symbol: String, colors: [Color])) -> some View {
+        VStack(spacing: 22) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 28, style: .continuous)
+                    .fill(LinearGradient(colors: page.colors, startPoint: .topLeading, endPoint: .bottomTrailing))
+                    .frame(width: 180, height: 180)
+                    .shadow(color: page.colors[0].opacity(0.4), radius: 24, y: 12)
+                Image(systemName: page.symbol)
+                    .font(.system(size: 72, weight: .semibold))
+                    .foregroundStyle(.white)
+            }
+
+            VStack(spacing: 10) {
+                Text(page.title)
+                    .heroHeadline(30)
+                    .foregroundStyle(.primary)
+                    .multilineTextAlignment(.center)
+                Text(page.lede)
+                    .siteLede(17)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 8)
+            }
+        }
+        .padding(.vertical, 24)
+    }
+}
+
+// MARK: - Vinyl disc
+
+struct VinylDisc: View {
+    let angle: Angle
+    let label: Color
+    let symbol: String?
+    var side: String? = nil
+    var light: Bool = false
+
+    var body: some View {
+        ZStack {
+            Circle()
+                .fill(Color(white: light ? 0.12 : 0.06))
+                .shadow(color: .black.opacity(0.4), radius: 24, y: 12)
+
+            ForEach(0..<8) { i in
+                Circle()
+                    .stroke(Color.white.opacity(0.04), lineWidth: 0.8)
+                    .padding(CGFloat(12 + i * 10))
+            }
+
+            Circle()
+                .fill(label.gradient)
+                .padding(58)
+                .shadow(color: label.opacity(0.4), radius: 12, y: 4)
+
+            if let symbol {
+                Image(systemName: symbol)
+                    .font(.system(size: 28, weight: .bold))
+                    .foregroundStyle(.white)
+            } else if let side {
+                Text(side)
+                    .font(.system(size: 9, weight: .bold))
+                    .foregroundStyle(.white.opacity(0.8))
+            }
+
+            Circle()
+                .fill(Color(white: 0.08))
+                .frame(width: 14, height: 14)
         }
         .aspectRatio(1, contentMode: .fit)
+        .rotationEffect(angle)
+        .animation(.easeOut(duration: 0.45), value: label)
+        .animation(.spring(duration: 0.5, bounce: 0.3), value: symbol)
     }
 }
 
-/// The website's label: the side printed above the spindle, Arioso below, in white (black on a pale label).
-private struct RecordLabel: View {
-    let color: Color
-    let symbol: String?
-    var side = "SIDE A · 33⅓"
+// MARK: - Spin model
 
-    @Environment(\.self) private var env
-
-    var body: some View {
-        GeometryReader { geo in
-            let s = geo.size.width
-            let c = color.resolve(in: env)
-            let pale = 0.2126 * Double(c.red) + 0.7152 * Double(c.green) + 0.0722 * Double(c.blue) > 0.72
-            ZStack {
-                Circle().fill(color)
-                Group {
-                    if let symbol {
-                        Image(systemName: symbol)
-                            .font(.system(size: s * 0.2, weight: .semibold))
-                            .transition(.scale(scale: 0.4).combined(with: .opacity))
-                    } else {
-                        VStack(spacing: 0) {
-                            Text(side).font(.system(size: s * 0.072, weight: .heavy)).tracking(s * 0.009)
-                            Spacer().frame(height: s * 0.3)
-                            Text("\(Brand.name)").font(.system(size: s * 0.11, weight: .heavy)).tracking(s * 0.009)
-                        }
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.5)
-                        .frame(width: s * 0.8)
-                        .transition(.scale(scale: 1.3).combined(with: .opacity))
-                    }
-                }
-                .foregroundStyle(pale ? Color.black.opacity(0.78) : .white)
-                Circle().fill(Color(white: 0.05)).frame(width: s * 0.09, height: s * 0.09)
-            }
-            .animation(.spring(duration: 0.5, bounce: 0.3), value: symbol)
-            .animation(.easeOut(duration: 0.45), value: color)
-        }
-    }
-}
-
-/// Idle turn with momentum: after a flick the speed decays exponentially back to `idle`.
-/// Pure function of time, so a TimelineView can draw it without mutating state.
 struct SpinModel {
     private var base = 0.0
     private var anchor = Date()
@@ -664,7 +687,6 @@ struct SpinModel {
 
 // MARK: - Text reveal
 
-/// Glyph-by-glyph reveal out of a soft blur, staggered left to right.
 struct BlurReveal: TextRenderer, Animatable {
     var progress: Double
     var spread = 0.55
@@ -693,7 +715,6 @@ struct BlurReveal: TextRenderer, Animatable {
 
 // MARK: - Buttons
 
-/// The full-width primary button: tinted red Liquid Glass on white, white glass on red.
 struct GlassCTA: View {
     let title: String
     var onRed = false
@@ -735,7 +756,6 @@ struct PrimaryPill: View {
 
 // MARK: - Goodbye
 
-/// From the icon's long-press menu: the record winds down to a stop. "Keep Listening" spins it back up.
 struct GoodbyeView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -761,13 +781,13 @@ struct GoodbyeView: View {
             .padding(.top, 40)
 
             VStack(spacing: 10) {
-                Text(stayed ? "Glad you’re staying." : "Goodbye — see you soon.")
+                Text(stayed ? "Glad you're staying." : "Goodbye — see you soon.")
                     .font(.system(size: 28, weight: .semibold))
                     .tracking(-0.5)
                     .textRenderer(BlurReveal(progress: titleIn ? 1 : 0))
                     .id(stayed)
                     .transition(.opacity)
-                Text("Thanks for listening. Removing \(Brand.name) also removes the music you imported into it — your original files and your server stay as they are.")
+                Text("Thanks for listening. Removing Music also removes the music you imported into it — your original files and your server stay as they are.")
                     .font(.system(size: 15))
                     .foregroundStyle(.secondary)
                     .textRenderer(BlurReveal(progress: subtitleIn ? 1 : 0))
@@ -786,7 +806,6 @@ struct GoodbyeView: View {
         .presentationDragIndicator(.visible)
         .sensoryFeedback(.impact(weight: .medium), trigger: kick)
         .task {
-            // Starts turning, then runs out of momentum — the end of the side.
             spin.reset(at: .now, angle: 0, velocity: reduceMotion ? 0 : 240)
             try? await Task.sleep(for: .milliseconds(reduceMotion ? 0 : 250))
             withAnimation(.linear(duration: reduceMotion ? 0 : 1.0)) { titleIn = true }
