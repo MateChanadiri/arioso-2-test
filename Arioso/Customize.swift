@@ -528,3 +528,31 @@ struct EntryPicker: View {
         }
     }
 }
+
+ // MARK: - Queue as a tab
+
+struct QueueTabView: View {
+    @Environment(PlayerModel.self) private var player
+
+    var body: some View {
+        ZStack {
+            LinearGradient(
+                colors: [ArtworkCache.tint(for: player.current), .black],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+            .ignoresSafeArea()
+
+            if player.current == nil {
+                ContentUnavailableView(
+                    "No Queue",
+                    systemImage: "list.bullet",
+                    description: Text("Play a song to see the queue.")
+                )
+            } else {
+                QueueView()
+            }
+        }
+        .navigationTitle("Queue")
+    }
+}
