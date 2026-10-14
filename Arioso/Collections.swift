@@ -1,3 +1,419 @@
+import SwiftUI
+import Observation
+
+// MARK: - Downloads / offline
+
+struct DownloadsView: View {
+    enum Scope: String, CaseIterable, Identifiable { case all = "On This iPhone", downloaded = "Downloaded", streaming = "Not Downloaded"; var id: String { rawValue } }
+
+    @Environment(LibraryStore.self) private var library
+    @Environment(PlayerModel.self) private var player
+    @Environment(DownloadManager.self) private var downloads
+    @Environment(SourceManager.self) private var sources
+    @State private var scope: Scope = .all
+    @State private var confirmRemove = false
+    @State private var editMode: EditMode = .inactive
+
+    private var tracks: [Track] {
+        let scope = scope
+        _ = library.downloadOrder
+        return library.memo("downloads|\(scope.rawValue)") {
+            let list: [Track]
+            switch scope {
+            case .all: list = library.tracks.filter(\.isOffline)
+            case .downloaded: list = library.tracks.filter(\.isDownloaded)
+            case .streaming: list = library.tracks.filter { $0.isRemote && !$0.isDownloaded }
+            }
+            return library.orderedDownloads(SmartShuffle.libraryOrder(list))
+        }
+    }
+
+    var body: some View {
+        let list = tracks
+        let running = downloads.runningIDs.compactMap { library.trackByID[$0] }.filter { downloads.state($0.id) != nil }
+        let queued = downloads.queue.compactMap { library.trackByID[$0] }
+        let failed = library.orderedDownloads(SmartShuffle.libraryOrder(downloads.states.compactMap { id, state in
+            state.isFailed ? library.trackByID[id] : nil
+        }))
+        let canReorder = list.count > 1 || queued.count > 1
+        List {
+            if sources.hasSources || !ModuleStore.shared.modules.isEmpty {
+                Picker("Show", selection: $scope) { ForEach(Scope.allCases) { Text($0.rawValue).tag($0) } }
+                    .pickerStyle(.segmented)
+                    .listRowSeparator(.hidden)
+            }
+            if !running.isEmpty {
+                Section("Downloading") {
+                    ForEach(running) { t in
+                        DownloadRow(track: t, state: downloads.state(t.id))
+                    }
+                }
+            }
+            if !queued.isEmpty {
+                Section {
+                    ForEach(queued) { t in
+                        DownloadRow(track: t, state: downloads.state(t.id))
+                    }
+                    .onMove { from, to in
+                        var ids = queued.map(\.id)
+                        ids.move(fromOffsets: from, toOffset: to)
+                        downloads.setQueueOrder(ids)
+                    }
+                    Button("Cancel Remaining", role: .destructive) { downloads.cancelAll() }
+                } header: { Text("Waiting") } footer: {
+                    Text("Downloads start from top to bottom.")
+                }
+            }
+            if !failed.isEmpty {
+                Section("Failed Downloads") {
+                    ForEach(failed) { t in
+                        DownloadRow(track: t, state: downloads.state(t.id))
+                    }
+                    Button("Retry Failed") { downloads.download(failed) }
+                }
+            }
+            if !list.isEmpty {
+                PlayShuffleBar(tracks: list, title: scope.rawValue)
+                    .listRowSeparator(.hidden)
+                    .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 8, trailing: 16))
+                Section {
+                    ForEach(list) { t in
+                        TrackRow(track: t) { player.play(list, startAt: list.firstIndex(of: t) ?? 0, title: scope.rawValue) }
+                    }
+                    .onMove { from, to in
+                        var ids = list.map(\.id)
+                        ids.move(fromOffsets: from, toOffset: to)
+                        library.setDownloadOrder(ids)
+                    }
+                } footer: {
+                    Text("\(songCount(list.count)) · \(ByteCountFormatter.string(fromByteCount: size(list), countStyle: .file))")
+                }
+            }
+        }
+        .listStyle(.plain)
+        .environment(\.editMode, $editMode)
+        .navigationTitle("Downloads")
+        .navigationBarTitleDisplayMode(.inline)
+        .overlay {
+            if list.isEmpty && downloads.states.isEmpty {
+                ContentUnavailableView(scope == .streaming ? "Everything Is Downloaded" : "No Downloads",
+                                       systemImage: "arrow.down.circle",
+                                       description: Text("Long-press an album, playlist or artist from your server and choose Download."))
+            }
+        }
+        .toolbar {
+            if canReorder || editMode.isEditing {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button(editMode.isEditing ? "Done" : "Edit Order") {
+                        withAnimation { editMode = editMode.isEditing ? .inactive : .active }
+                    }
+                }
+            }
+            if scope == .streaming, !list.isEmpty {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button { downloads.download(list) } label: { Image(systemName: "arrow.down.circle") }.accessibilityLabel("Download All")
+                }
+            }
+            if scope == .downloaded, !list.isEmpty {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button(role: .destructive) { confirmRemove = true } label: { Image(systemName: "trash") }.accessibilityLabel("Remove Downloads")
+                }
+            }
+        }
+        .confirmationDialog("Remove all downloaded songs from this iPhone? They stay in your library for streaming.", isPresented: $confirmRemove, titleVisibility: .visible) {
+            Button("Remove Downloads", role: .destructive) { downloads.removeDownloads(list) }
+        }
+    }
+
+    private func size(_ list: [Track]) -> Int64 {
+        list.reduce(0) { sum, t in
+            guard !t.path.isEmpty else { return sum }
+            return sum + ((try? FileManager.default.attributesOfItem(atPath: Paths.url(for: t).path)[.size] as? Int64) ?? 0)
+        }
+    }
+}
+
+struct DownloadRow: View {
+    let track: Track
+    let state: DownloadManager.State?
+    var body: some View {
+        HStack(spacing: 12) {
+            ArtworkView(track: track).thumbnail().frame(width: 44, height: 44)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(track.title).font(.system(size: 15, weight: .medium)).lineLimit(1)
+                switch state {
+                case .downloading(let p): ProgressView(value: p).tint(Theme.accent)
+                case .failed(let m): Text(m).font(.caption).foregroundStyle(.red).lineLimit(1)
+                default: Text("Waiting…").font(.caption).foregroundStyle(.secondary)
+                }
+            }
+        }
+    }
+}
+
+// MARK: - Favorites
+
+struct FavoritesView: View {
+    @Environment(LibraryStore.self) private var library
+    @Environment(PlayerModel.self) private var player
+
+    var body: some View {
+        let songs = library.memo("favorites.songs") {
+            library.tracks.filter(\.isFavorite).sorted { $0.title.localizedStandardCompare($1.title) == .orderedAscending }
+        }
+        let entries = (library.playlistEntries + library.albumEntries + library.artistEntries).filter { library.isFavorite($0) }
+        List {
+            if !entries.isEmpty {
+                Section("Collections") {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 14) {
+                            ForEach(entries) { e in
+                                NavigationLink(value: e.route) {
+                                    VStack(spacing: 6) {
+                                        ArtworkView(entry: e, radius: 12).thumbnail(340).frame(width: 110, height: 110)
+                                        Text(e.title).font(.system(size: 13, weight: .medium)).lineLimit(1).frame(width: 110)
+                                    }
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
+                        .padding(.vertical, 4)
+                    }
+                    .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
+                }
+            }
+            if !songs.isEmpty {
+                Section {
+                    PlayShuffleBar(tracks: songs, title: "Favorites").listRowSeparator(.hidden)
+                    ForEach(songs) { t in
+                        TrackRow(track: t) { player.play(songs, startAt: songs.firstIndex(of: t) ?? 0, title: "Favorites") }
+                    }
+                } header: { Text("Songs") }
+            }
+        }
+        .listStyle(.plain)
+        .navigationTitle("Favorites")
+        .navigationBarTitleDisplayMode(.inline)
+        .overlay {
+            if songs.isEmpty && entries.isEmpty {
+                ContentUnavailableView("No Favorites", systemImage: "star", description: Text("Star songs in the player, or long-press artists, albums and playlists."))
+            }
+        }
+    }
+}
+
+// MARK: - Radio
+
+struct RadioView: View {
+    @Environment(LibraryStore.self) private var library
+    @Environment(PlayerModel.self) private var player
+    @Environment(AppSettings.self) private var settings
+
+    private var topArtists: [LibraryEntry] {
+        library.memo("radio.topArtists") {
+            library.artistEntries.sorted { a, b in
+                a.tracks.reduce(0) { $0 + ($1.playCount ?? 0) } > b.tracks.reduce(0) { $0 + ($1.playCount ?? 0) }
+            }.prefix(12).map { $0 }
+        }
+    }
+
+    private var genres: [(String, [Track])] {
+        library.memo("radio.genres") {
+            Dictionary(grouping: library.tracks.filter { $0.genre != nil }, by: { $0.genre! })
+                .filter { $0.value.count >= 5 }
+                .sorted { $0.value.count > $1.value.count }
+                .prefix(12).map { ($0.key, $0.value) }
+        }
+    }
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 26) {
+                LazyVGrid(columns: [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)], spacing: 12) {
+                    station("Your Station", "Smart shuffle of everything", "sparkles", [.pink, .purple]) {
+                        let list = SmartShuffle.order(library.tracks, options: .init(familiarity: max(0.6, settings.shuffleFamiliarity)))
+                        player.play(list, title: "Your Station")
+                    }
+                    station("Discovery", "Songs you've never played", "binoculars.fill", [.teal, .blue]) {
+                        let list = library.tracks.filter { ($0.playCount ?? 0) == 0 }.shuffled()
+                        player.play(list.isEmpty ? library.tracks.shuffled() : list, title: "Discovery")
+                    }
+                    station("Favorites Radio", "Starred songs, shuffled", "star.fill", [.orange, .yellow]) {
+                        player.play(library.tracks.filter(\.isFavorite), title: "Favorites Radio", shuffled: true)
+                    }
+                    station("Deep Cuts", "Rarely played album tracks", "opticaldisc.fill", [.indigo, .black]) {
+                        let list = library.tracks.filter { ($0.playCount ?? 0) <= 1 && !$0.isFavorite }.shuffled()
+                        player.play(Array(list.prefix(100)), title: "Deep Cuts")
+                    }
+                    if let t = player.current {
+                        station("More Like This", t.title, "dot.radiowaves.left.and.right", [Theme.accent, .red]) { player.startStation(from: t) }
+                    }
+                    let upbeat = library.tracks.filter { ($0.bpm ?? 0) >= 118 }
+                    if upbeat.count >= 10 {
+                        station("Energy", "Fast songs, beat-matched", "bolt.fill", [.yellow, .red]) {
+                            player.play(upbeat.sorted { ($0.bpm ?? 0) < ($1.bpm ?? 0) }, title: "Energy")
+                        }
+                    }
+                    let calm = library.tracks.filter { ($0.bpm ?? 200) < 95 }
+                    if calm.count >= 10 {
+                        station("Calm", "Slow and easy", "leaf.fill", [.green, .teal]) { player.play(calm, title: "Calm", shuffled: true) }
+                    }
+                }
+                .padding(.horizontal, 16)
+
+                if !topArtists.isEmpty {
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text("Artist Stations").font(.system(size: 22, weight: .bold)).padding(.horizontal, 20)
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            HStack(spacing: 14) {
+                                ForEach(topArtists) { a in
+                                    Button { if let seed = a.tracks.randomElement() { player.startStation(from: seed) } } label: {
+                                        VStack(spacing: 8) {
+                                            ArtworkView(entry: a).thumbnail(370).frame(width: 120, height: 120)
+                                                .overlay(alignment: .bottomTrailing) {
+                                                    Image(systemName: "dot.radiowaves.left.and.right").font(.system(size: 13, weight: .bold))
+                                                        .foregroundStyle(.white).frame(width: 32, height: 32).glassEffect(.regular, in: .circle)
+                                                }
+                                            Text(a.title).font(.system(size: 13, weight: .medium)).lineLimit(1).frame(width: 120)
+                                        }
+                                    }
+                                    .buttonStyle(.plain)
+                                }
+                            }
+                            .padding(.horizontal, 20)
+                        }
+                    }
+                }
+
+                if !genres.isEmpty {
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text("Genre Stations").font(.system(size: 22, weight: .bold)).padding(.horizontal, 20)
+                        LazyVGrid(columns: [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)], spacing: 12) {
+                            ForEach(genres, id: \.0) { g, list in
+                                let c = placeholderColors(seed: g)
+                                station(g, songCount(list.count), "music.note", [c.0, c.1]) {
+                                    player.play(SmartShuffle.order(list, options: .init(familiarity: settings.shuffleFamiliarity)), title: "\(g) Radio")
+                                }
+                            }
+                        }
+                        .padding(.horizontal, 16)
+                    }
+                }
+            }
+            .padding(.vertical, 12)
+        }
+        .navigationTitle("Radio")
+        .overlay { if library.tracks.isEmpty { ContentUnavailableView("No Music Yet", systemImage: "dot.radiowaves.left.and.right") } }
+    }
+
+    private func station(_ title: String, _ subtitle: String, _ icon: String, _ colors: [Color], action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            VStack(alignment: .leading, spacing: 6) {
+                Image(systemName: icon).font(.system(size: 22, weight: .semibold))
+                Spacer(minLength: 8)
+                Text(title).font(.system(size: 17, weight: .bold)).lineLimit(1)
+                Text(subtitle).font(.system(size: 12)).opacity(0.8).lineLimit(1)
+            }
+            .foregroundStyle(.white)
+            .padding(14)
+            .frame(maxWidth: .infinity, minHeight: 118, alignment: .leading)
+            .background(LinearGradient(colors: colors, startPoint: .topLeading, endPoint: .bottomTrailing),
+                        in: RoundedRectangle(cornerRadius: 20 * ThemeStore.shared.current.cornerScale, style: .continuous))
+        }
+        .buttonStyle(PressScale())
+        .sensoryFeedback(.impact(weight: .light), trigger: player.queueTitle)
+    }
+}
+
+// MARK: - Recently played
+
+struct RecentlyPlayedView: View {
+    @Environment(LibraryStore.self) private var library
+    @Environment(PlayerModel.self) private var player
+
+    var body: some View {
+        let played = library.memo("recentlyPlayed") { library.tracks.filter { $0.lastPlayed != nil }.sorted { $0.lastPlayed! > $1.lastPlayed! } }
+        let groups = Dictionary(grouping: played.prefix(300)) { Calendar.current.startOfDay(for: $0.lastPlayed!) }
+        List {
+            ForEach(groups.keys.sorted(by: >), id: \.self) { day in
+                Section(dayTitle(day)) {
+                    ForEach(groups[day]!) { t in
+                        TrackRow(track: t) { player.play(played, startAt: played.firstIndex(of: t) ?? 0, title: "Recently Played") }
+                    }
+                }
+            }
+        }
+        .listStyle(.plain)
+        .navigationTitle("Recently Played")
+        .navigationBarTitleDisplayMode(.inline)
+        .overlay { if played.isEmpty { ContentUnavailableView("Nothing Played Yet", systemImage: "clock") } }
+    }
+
+    private func dayTitle(_ d: Date) -> String {
+        if Calendar.current.isDateInToday(d) { return "Today" }
+        if Calendar.current.isDateInYesterday(d) { return "Yesterday" }
+        return d.formatted(.dateTime.weekday(.wide).day().month())
+    }
+}
+
+// MARK: - Sources (Jellyfin, Subsonic)
+
+struct SourcesView: View {
+    @Environment(SourceManager.self) private var sources
+    @Environment(AppSettings.self) private var settings
+    @Environment(Router.self) private var router
+    @State private var adding: SourceKind?
+    @State private var addingModule = false
+    @State private var cacheSize: Int64 = 0
+    @AppStorage("streamCacheMB") private var cacheMB = 1024
+
+    var body: some View {
+        @Bindable var sources = sources
+        @Bindable var settings = settings
+        List {
+            Section {
+                Button { router.openAddMusic() } label: {
+                    HStack(spacing: 14) {
+                        Image(systemName: "plus.circle.fill")
+                            .font(.system(size: 20, weight: .semibold))
+                            .foregroundStyle(.primary)
+                            .frame(width: 32, height: 32)
+                        Text("Add Music (Local, Jellyfin, Subsonic, etc.)")
+                        Spacer()
+                        Image(systemName: "chevron.right").font(.footnote.bold()).foregroundStyle(.tertiary)
+                    }
+                }
+                .tint(.primary)
+
+                ForEach(sources.accounts) { acc in
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack(spacing: 12) {
+                            Image(systemName: acc.kind.symbol)
+                                .font(.system(size: 20, weight: .semibold))
+                                .foregroundStyle(.primary)
+                                .frame(width: 36, height: 36)
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text(acc.name).font(.headline)
+                                Text("\(acc.userName) · \(URL(string: acc.baseURL)?.host() ?? acc.baseURL)").font(.caption).foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            if sources.syncing.contains(acc.id) { ProgressView() }
+                        }
+                        HStack {
+                            Text("\(acc.trackCount) songs").font(.caption).foregroundStyle(.secondary)
+                            if let d = acc.lastSync { Text("· synced \(d.formatted(.relative(presentation: .named)))").font(.caption).foregroundStyle(.secondary) }
+                        }
+                        if let e = sources.lastError[acc.id] { Text(e).font(.caption).foregroundStyle(.red) }
+                    }
+                    .swipeActions {
+                        Button("Remove", role: .destructive) { sources.remove(acc.id) }
+                        Button("Sync") { Task { await sources.sync(acc.id) } }.tint(.blue)
+                    }
+                    .contextMenu {
+                        Button { Task { await sources.sync(acc.id) } } label: { Label("Sync Now", systemImage: "arrow.triangle.2.circlepath") }
+                        Button { sources.setEnabled(acc.id, !acc.enabled) } label: { Label(acc.enabled ? "Pause Source" : "Resume Source", systemImage: acc.enabled ? "pause" : "play") }
+                        Button(role: .destructive) { sources.remove(acc.id) } label: { Label("Remove Server", systemImage: "trash") }
+                    }
                 }
                 Menu {
                     ForEach(SourceKind.allCases) { kind in
