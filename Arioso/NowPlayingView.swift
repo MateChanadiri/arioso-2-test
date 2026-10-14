@@ -326,9 +326,13 @@ struct NowPlayingView: View {
     private var editToolbar: some View {
         VStack {
             HStack(spacing: 10) {
-                Button("Cancel") { finishEdit(save: false) }
-                    .buttonStyle(.glass)
+                Button("Cancel") {
+                    finishEdit(save: false)
+                }
+                .buttonStyle(.glass)
+
                 Spacer()
+
                 Menu {
                     Section("Start From a Layout") {
                         ForEach(AppTheme.builtIns) { t in
@@ -340,26 +344,40 @@ struct NowPlayingView: View {
                             }
                         }
                     }
-                    Button { showAllSettings = true } label: { Label(""…" Menu & All Settings", systemImage: "list.bullet") }
+
+                    Button {
+                        showAllSettings = true
+                    } label: {
+                        Label("Menu & All Settings", systemImage: "list.bullet")
+                    }
                 } label: {
                     Label("Layouts", systemImage: "square.grid.2x2")
                         .font(.system(size: 15, weight: .semibold))
-                        .padding(.horizontal, 14).frame(height: 36)
+                        .padding(.horizontal, 14)
+                        .frame(height: 36)
                         .glassEffect(.regular.interactive(), in: Capsule())
                 }
                 .buttonStyle(.plain)
+
                 Spacer()
-                Button("Done") { finishEdit(save: true) }
-                    .buttonStyle(.glassProminent)
-                    .tint(.white)
-                    .foregroundStyle(.black)
+
+                Button("Done") {
+                    finishEdit(save: true)
+                }
+                .buttonStyle(.glassProminent)
+                .tint(.white)
+                .foregroundStyle(.black)
             }
             .font(.system(size: 15, weight: .semibold))
             .padding(.horizontal, 16)
             .padding(.top, 6)
-            Text(editTarget == nil ? "Drag to move · Tap to change · Tap the background for colors" : " ")
+
+            Text(editTarget == nil
+                 ? "Drag to move · Tap to change · Tap the background for colors"
+                 : " ")
                 .font(.system(size: 12, weight: .medium))
                 .foregroundStyle(.white.opacity(0.6))
+
             Spacer()
         }
         .foregroundStyle(.white)
